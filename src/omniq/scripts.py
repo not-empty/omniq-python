@@ -17,9 +17,9 @@ class OmniqScripts:
     pause_sha: str
     resume_sha: str
 
-def default_scripts_dir(current_file: str) -> str:
-    here = os.path.dirname(os.path.abspath(current_file))
-    return os.path.abspath(os.path.join(here, "..", "..", "scripts", "scripts"))
+def default_scripts_dir() -> str:
+    here = os.path.dirname(__file__)
+    return os.path.join(here, "core", "scripts")
 
 def load_scripts(r: ScriptLoader, scripts_dir: str) -> OmniqScripts:
     def load_one(name: str) -> str:
