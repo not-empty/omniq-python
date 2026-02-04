@@ -1,5 +1,5 @@
 import time
-from omniq.client import OmniqClient
+from src.omniq.client import OmniqClient
 
 def handler(ctx):
     time.sleep(2)

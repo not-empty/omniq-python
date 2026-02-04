@@ -1,6 +1,0 @@
-[submodule "scripts"]
-	path = scripts
-	url = git@github.com:not-empty/omniq.git
-[submodule "scr/omniq/core"]
-	path = scr/omniq/core
-	url = git@github.com:not-empty/omniq.git
