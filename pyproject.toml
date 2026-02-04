@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omniq"
-version = "1.0.1"
+version = "1.0.2"
 description = "OmniQ v1 - Redis+Lua queue Python SDK"
 requires-python = ">=3.9"
 dependencies = ["redis>=5.0.0", "ulid-py>=1.1.0"]
@@ -14,3 +14,8 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+omniq = [
+  "core/scripts/*.lua",
+]
