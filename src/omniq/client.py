@@ -1,0 +1,136 @@
+from dataclasses import dataclass
+from typing import Callable, Optional, Any
+
+from ._ops import OmniqOps
+from .consumer import consume as consume_loop
+from .scripts import load_scripts, default_scripts_dir
+from .transport import RedisConnOpts, build_redis_client, RedisLike
+from .types import PayloadT, ReserveResult, AckFailResult
+
+@dataclass
+class OmniqClient:
+    _ops: OmniqOps
+
+    def __init__(
+        self,
+        *,
+        redis: Optional[RedisLike] = None,
+        redis_url: Optional[str] = None,
+        host: Optional[str] = None,
+        port: int = 6379,
+        db: int = 0,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        ssl: bool = False,
+        scripts_dir: Optional[str] = None,
+    ):
+        if redis is not None:
+            r = redis
+        else:
+            r = build_redis_client(
+                RedisConnOpts(
+                    redis_url=redis_url,
+                    host=host,
+                    port=port,
+                    db=db,
+                    username=username,
+                    password=password,
+                    ssl=ssl,
+                )
+            )
+
+        if scripts_dir is None:
+            scripts_dir = default_scripts_dir(__file__)
+        scripts = load_scripts(r, scripts_dir)
+
+        self._ops = OmniqOps(r=r, scripts=scripts)
+
+    @staticmethod
+    def queue_base(queue_name: str) -> str:
+        return OmniqOps.queue_base(queue_name)
+
+    def publish(
+        self,
+        *,
+        queue: str,
+        payload: Any,
+        job_id: Optional[str] = None,
+        max_attempts: int = 3,
+        timeout_ms: int = 60_000,
+        backoff_ms: int = 5_000,
+        due_ms: int = 0,
+        gid: Optional[str] = None,
+        group_limit: int = 0,
+    ) -> str:
+        return self._ops.publish(
+            queue=queue,
+            payload=payload,
+            job_id=job_id,
+            max_attempts=max_attempts,
+            timeout_ms=timeout_ms,
+            backoff_ms=backoff_ms,
+            due_ms=due_ms,
+            gid=gid,
+            group_limit=group_limit,
+        )
+
+    def reserve(self, *, queue: str, now_ms_override: int = 0) -> ReserveResult:
+        return self._ops.reserve(queue=queue, now_ms_override=now_ms_override)
+
+    def heartbeat(self, *, queue: str, job_id: str, lease_token: str, now_ms_override: int = 0) -> int:
+        return self._ops.heartbeat(queue=queue, job_id=job_id, lease_token=lease_token, now_ms_override=now_ms_override)
+
+    def ack_success(self, *, queue: str, job_id: str, lease_token: str, now_ms_override: int = 0) -> None:
+        return self._ops.ack_success(queue=queue, job_id=job_id, lease_token=lease_token, now_ms_override=now_ms_override)
+
+    def ack_fail(self, *, queue: str, job_id: str, lease_token: str, now_ms_override: int = 0) -> AckFailResult:
+        return self._ops.ack_fail(queue=queue, job_id=job_id, lease_token=lease_token, now_ms_override=now_ms_override)
+
+    def promote_delayed(self, *, queue: str, max_promote: int = 1000, now_ms_override: int = 0) -> int:
+        return self._ops.promote_delayed(queue=queue, max_promote=max_promote, now_ms_override=now_ms_override)
+
+    def reap_expired(self, *, queue: str, max_reap: int = 1000, now_ms_override: int = 0) -> int:
+        return self._ops.reap_expired(queue=queue, max_reap=max_reap, now_ms_override=now_ms_override)
+
+    def pause(self, *, queue: str) -> str:
+        return self._ops.pause(queue=queue)
+
+    def resume(self, *, queue: str) -> int:
+        return self._ops.resume(queue=queue)
+
+    def is_paused(self, *, queue: str) -> bool:
+        return self._ops.is_paused(queue=queue)
+
+    def consume(
+        self,
+        *,
+        queue: str,
+        handler: Callable[[Any], None],
+        poll_interval_s: float = 0.05,
+        promote_interval_s: float = 1.0,
+        promote_batch: int = 1000,
+        reap_interval_s: float = 1.0,
+        reap_batch: int = 1000,
+        heartbeat_interval_s: Optional[float] = None,
+        verbose: bool = False,
+        logger: Callable[[str], None] = print,
+        drain: bool = True,
+    ) -> None:
+        return consume_loop(
+            self._ops,
+            queue=queue,
+            handler=handler,
+            poll_interval_s=poll_interval_s,
+            promote_interval_s=promote_interval_s,
+            promote_batch=promote_batch,
+            reap_interval_s=reap_interval_s,
+            reap_batch=reap_batch,
+            heartbeat_interval_s=heartbeat_interval_s,
+            verbose=verbose,
+            logger=logger,
+            drain=drain,
+        )
+
+    @property
+    def ops(self) -> OmniqOps:
+        return self._ops

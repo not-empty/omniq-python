@@ -1,0 +1,318 @@
+import json
+import threading
+import time
+import signal
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Optional
+
+from ._ops import OmniqOps
+from .types import JobCtx, ReserveJob
+
+@dataclass
+class StopController:
+    stop: bool = False
+
+@dataclass
+class HeartbeatHandle:
+    stop_evt: threading.Event
+    flags: Dict[str, bool]
+    thread: threading.Thread
+
+def _install_sigterm_handler(ctrl: StopController, logger, verbose: bool) -> None:
+    def on_sigterm(signum, _frame):
+        ctrl.stop = True
+        if verbose:
+            _safe_log(logger, f"[consume] SIGTERM received (stopping...)")
+
+    signal.signal(signal.SIGTERM, on_sigterm)
+
+def start_heartbeater(
+    ops: OmniqOps,
+    *,
+    queue: str,
+    job_id: str,
+    lease_token: str,
+    interval_s: float,
+) -> HeartbeatHandle:
+    stop_evt = threading.Event()
+    flags: Dict[str, bool] = {"lost": False}
+
+    def hb_loop():
+        try:
+            ops.heartbeat(queue=queue, job_id=job_id, lease_token=lease_token)
+        except Exception as e:
+            msg = str(e)
+            if "NOT_ACTIVE" in msg or "TOKEN_MISMATCH" in msg:
+                flags["lost"] = True
+                stop_evt.set()
+                return
+
+        while not stop_evt.wait(interval_s):
+            try:
+                ops.heartbeat(queue=queue, job_id=job_id, lease_token=lease_token)
+            except Exception as e:
+                msg = str(e)
+                if "NOT_ACTIVE" in msg or "TOKEN_MISMATCH" in msg:
+                    flags["lost"] = True
+                    stop_evt.set()
+                    return
+
+    t = threading.Thread(target=hb_loop, daemon=True)
+    t.start()
+    return HeartbeatHandle(stop_evt=stop_evt, flags=flags, thread=t)
+
+
+def _safe_log(logger: Callable[[str], None], msg: str) -> None:
+    try:
+        logger(msg)
+    except Exception:
+        pass
+
+
+def _payload_preview(payload: Any, max_len: int = 300) -> str:
+    try:
+        s = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        s = str(payload)
+    if len(s) > max_len:
+        return s[:max_len] + "…"
+    return s
+
+def consume(
+    ops: OmniqOps,
+    *,
+    queue: str,
+    handler: Callable[[JobCtx], None],
+    poll_interval_s: float = 0.05,
+    promote_interval_s: float = 1.0,
+    promote_batch: int = 1000,
+    reap_interval_s: float = 1.0,
+    reap_batch: int = 1000,
+    heartbeat_interval_s: Optional[float] = None,
+    verbose: bool = False,
+    logger: Callable[[str], None] = print,
+    stop_on_ctrl_c: bool = True,
+    drain: bool = True,
+) -> None:
+    """
+    Shutdown semantics:
+
+    - drain=True:
+        Ctrl+C (SIGINT) requests stop AFTER current job finishes.
+        We override SIGINT so it does NOT raise KeyboardInterrupt (graceful).
+        Second Ctrl+C => hard exit.
+
+    - drain=False:
+        Ctrl+C raises KeyboardInterrupt normally (fast stop).
+        We do NOT override SIGINT.
+        SIGTERM always requests stop; if drain=False we exit ASAP after reserve.
+
+    Notes:
+    - We cannot force-stop user code safely. drain=False relies on KeyboardInterrupt to interrupt sleep/py code.
+    """
+
+    last_promote = 0.0
+    last_reap = 0.0
+
+    # ensure StopController has sigint_count
+    if not hasattr(StopController, "__annotations__") or "sigint_count" not in getattr(StopController, "__annotations__", {}):
+        # fallback: still works without sigint_count, but no "double Ctrl+C" behavior
+        ctrl = StopController(stop=False)  # type: ignore
+        ctrl.sigint_count = 0  # type: ignore
+    else:
+        ctrl = StopController(stop=False, sigint_count=0)  # type: ignore
+
+    if stop_on_ctrl_c:
+        import signal
+
+        # Always handle SIGTERM (docker/k8s stop)
+        def on_sigterm(signum, _frame):
+            ctrl.stop = True
+            if verbose:
+                _safe_log(logger, f"[consume] SIGTERM received; stopping... queue={queue}")
+
+        signal.signal(signal.SIGTERM, on_sigterm)
+
+        if drain:
+            # drain=True: override SIGINT so handler is NOT interrupted.
+            # first Ctrl+C => request stop-after-job
+            # second Ctrl+C => hard exit (KeyboardInterrupt)
+            prev = signal.getsignal(signal.SIGINT)
+
+            def on_sigint(signum, frame):
+                ctrl.sigint_count += 1
+                if ctrl.sigint_count >= 2:
+                    if verbose:
+                        _safe_log(logger, f"[consume] SIGINT x2; hard exit now. queue={queue}")
+                    # restore default and re-raise via default behavior
+                    try:
+                        signal.signal(signal.SIGINT, prev if prev else signal.SIG_DFL)
+                    except Exception:
+                        signal.signal(signal.SIGINT, signal.SIG_DFL)
+                    raise KeyboardInterrupt
+
+                ctrl.stop = True
+                if verbose:
+                    _safe_log(logger, f"[consume] Ctrl+C received; draining current job then exiting. queue={queue}")
+
+            signal.signal(signal.SIGINT, on_sigint)
+        else:
+            # drain=False: do NOT override SIGINT
+            pass
+
+    try:
+        while True:
+            # if stop requested and idle, exit
+            if ctrl.stop:
+                if verbose:
+                    _safe_log(logger, f"[consume] stop requested; exiting (idle). queue={queue}")
+                return
+
+            now_s = time.time()
+
+            if now_s - last_promote >= promote_interval_s:
+                try:
+                    ops.promote_delayed(queue=queue, max_promote=promote_batch)
+                except Exception:
+                    pass
+                last_promote = now_s
+
+            if now_s - last_reap >= reap_interval_s:
+                try:
+                    ops.reap_expired(queue=queue, max_reap=reap_batch)
+                except Exception:
+                    pass
+                last_reap = now_s
+
+            try:
+                res = ops.reserve(queue=queue)
+            except Exception as e:
+                if verbose:
+                    _safe_log(logger, f"[consume] reserve error: {e}")
+                time.sleep(0.2)
+                continue
+
+            if res is None:
+                time.sleep(poll_interval_s)
+                continue
+
+            if getattr(res, "status", "") == "PAUSED":
+                time.sleep(ops.paused_backoff_s(poll_interval_s))
+                continue
+
+            assert isinstance(res, ReserveJob)
+            if not res.lease_token:
+                if verbose:
+                    _safe_log(logger, f"[consume] invalid reserve (missing lease_token) job_id={res.job_id}")
+                time.sleep(0.2)
+                continue
+
+            # if stop requested right after reserve:
+            # - drain=False => exit ASAP (no handler, no ack, stop heartbeats)
+            # - drain=True  => process this one job, then exit after ack
+            if ctrl.stop and not drain:
+                if verbose:
+                    _safe_log(logger, f"[consume] stop requested; fast-exit after reserve job_id={res.job_id}")
+                return
+
+            # payload is JSON (contract). keep defensive fallback.
+            try:
+                payload_obj: Any = json.loads(res.payload)
+            except Exception:
+                payload_obj = res.payload
+
+            ctx = JobCtx(
+                queue=queue,
+                job_id=res.job_id,
+                payload_raw=res.payload,
+                payload=payload_obj,
+                attempt=res.attempt,
+                lock_until_ms=res.lock_until_ms,
+                lease_token=res.lease_token,
+                gid=res.gid,
+            )
+
+            if verbose:
+                pv = _payload_preview(ctx.payload)
+                gid_s = ctx.gid or "-"
+                _safe_log(logger, f"[consume] received job_id={ctx.job_id} attempt={ctx.attempt} gid={gid_s} payload={pv}")
+
+            # heartbeat cadence
+            if heartbeat_interval_s is not None:
+                hb_s = float(heartbeat_interval_s)
+            else:
+                timeout_ms = ops.job_timeout_ms(queue=queue, job_id=res.job_id)
+                hb_s = ops.derive_heartbeat_interval_s(timeout_ms)
+
+            hb = start_heartbeater(
+                ops,
+                queue=queue,
+                job_id=res.job_id,
+                lease_token=res.lease_token,
+                interval_s=hb_s,
+            )
+
+            try:
+                handler(ctx)
+
+                hb.stop_evt.set()
+
+                if not hb.flags.get("lost", False):
+                    try:
+                        ops.ack_success(queue=queue, job_id=res.job_id, lease_token=res.lease_token)
+                        if verbose:
+                            _safe_log(logger, f"[consume] ack success job_id={ctx.job_id}")
+                    except Exception as e:
+                        if verbose:
+                            _safe_log(logger, f"[consume] ack success error job_id={ctx.job_id}: {e}")
+
+            except KeyboardInterrupt:
+                # This only happens in drain=False mode (SIGINT not overridden),
+                # or on double Ctrl+C in drain=True mode.
+                if verbose:
+                    _safe_log(logger, f"[consume] KeyboardInterrupt; exiting now. queue={queue}")
+                hb.stop_evt.set()
+                return
+
+            except Exception as e:
+                hb.stop_evt.set()
+
+                if not hb.flags.get("lost", False):
+                    try:
+                        err = f"{type(e).__name__}: {e}"
+                        result = ops.ack_fail(
+                            queue=queue,
+                            job_id=res.job_id,
+                            lease_token=res.lease_token,
+                            error=err,
+                        )
+                        if verbose:
+                            if result[0] == "RETRY":
+                                _safe_log(logger, f"[consume] ack fail job_id={ctx.job_id} => RETRY due_ms={result[1]}")
+                            else:
+                                _safe_log(logger, f"[consume] ack fail job_id={ctx.job_id} => FAILED")
+                            _safe_log(logger, f"[consume] error job_id={ctx.job_id} => {err}")
+                    except Exception as e2:
+                        if verbose:
+                            _safe_log(logger, f"[consume] ack fail error job_id={ctx.job_id}: {e2}")
+
+            finally:
+                try:
+                    hb.thread.join(timeout=0.1)
+                except Exception:
+                    pass
+
+            # drain=True: if stop requested (SIGTERM or Ctrl+C), exit after finishing this job
+            if ctrl.stop and drain:
+                if verbose:
+                    _safe_log(logger, f"[consume] stop requested; exiting after draining job_id={ctx.job_id}")
+                return
+
+    except KeyboardInterrupt:
+        # Ctrl+C while idle in drain=False mode, or double Ctrl+C in drain=True mode
+        if verbose:
+            _safe_log(logger, f"[consume] KeyboardInterrupt (outer); exiting now. queue={queue}")
+        return
+
+
+
