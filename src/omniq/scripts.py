@@ -19,7 +19,7 @@ class OmniqScripts:
 
 def default_scripts_dir(current_file: str) -> str:
     here = os.path.dirname(os.path.abspath(current_file))
-    return os.path.abspath(os.path.join(here, "..", "..", "scripts"))
+    return os.path.abspath(os.path.join(here, "..", "..", "scripts", "scripts"))
 
 def load_scripts(r: ScriptLoader, scripts_dir: str) -> OmniqScripts:
     def load_one(name: str) -> str:

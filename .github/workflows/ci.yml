@@ -20,5 +20,5 @@ jobs:
       - name: Sanity
         run: |
           python -c "from omniq.client import OmniqClient; print('import ok')"
-          test -f scripts/enqueue.lua
+          test -f scripts/scripts/enqueue.lua
           echo "OK"
