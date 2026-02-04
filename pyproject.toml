@@ -1,13 +1,26 @@
+[project]
+name = "omniq"
+version = "1.0.0"
+authors = [
+  { name="Not Empty Foundation", email="dev@not-empty.org" },
+]
+description = "OmniQ v1 - Redis+Lua queue Python SDK"
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.9"
+dependencies = ["redis>=5.0.0", "ulid-py>=1.1.0"]
+
+[project.urls]
+Homepage = "https://github.com/not-empty/omniq-python"
+Issues = "https://github.com/not-empty/omniq-python/issues"
+
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
-
-[project]
-name = "omniq"
-version = "1.0.2"
-description = "OmniQ v1 - Redis+Lua queue Python SDK"
-requires-python = ">=3.9"
-dependencies = ["redis>=5.0.0", "ulid-py>=1.1.0"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
