@@ -1,13 +1,10 @@
 import time
-from src.omniq.client import OmniqClient
+from omniq.client import OmniqClient
 
 def handler(ctx):
+    print("Waiting 2 seconds")
     time.sleep(2)
-    print(1)
-    time.sleep(2)
-    print(2)
-    time.sleep(2)
-    print("done")
+    print("Done")
 
 uq = OmniqClient(
     host="omniq-redis",

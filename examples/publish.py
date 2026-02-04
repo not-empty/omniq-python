@@ -1,4 +1,4 @@
-from src.omniq.client import OmniqClient
+from omniq.client import OmniqClient
 
 uq = OmniqClient(
     host="omniq-redis",

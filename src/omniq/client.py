@@ -40,7 +40,7 @@ class OmniqClient:
             )
 
         if scripts_dir is None:
-            scripts_dir = default_scripts_dir(__file__)
+            scripts_dir = default_scripts_dir()
         scripts = load_scripts(r, scripts_dir)
 
         self._ops = OmniqOps(r=r, scripts=scripts)
