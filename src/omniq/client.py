@@ -5,7 +5,8 @@ from ._ops import OmniqOps
 from .consumer import consume as consume_loop
 from .scripts import load_scripts, default_scripts_dir
 from .transport import RedisConnOpts, build_redis_client, RedisLike
-from .types import PayloadT, ReserveResult, AckFailResult
+from .types import ReserveResult, AckFailResult
+from .helper import queue_base
 
 @dataclass
 class OmniqClient:
@@ -47,7 +48,7 @@ class OmniqClient:
 
     @staticmethod
     def queue_base(queue_name: str) -> str:
-        return OmniqOps.queue_base(queue_name)
+        return queue_base(queue_name)
 
     def publish(
         self,

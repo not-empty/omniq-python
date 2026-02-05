@@ -1,0 +1,100 @@
+services:
+
+  omniq-redis-c1:
+    image: redis:7.4-alpine
+    container_name: omniq-redis-c1
+    ports:
+      - "7001:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - redis_c1_data:/data
+
+  omniq-redis-c2:
+    image: redis:7.4-alpine
+    container_name: omniq-redis-c2
+    ports:
+      - "7002:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - redis_c2_data:/data
+
+  omniq-redis-c3:
+    image: redis:7.4-alpine
+    container_name: omniq-redis-c3
+    ports:
+      - "7003:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - redis_c3_data:/data
+
+  omniq-redis-cluster-init:
+    image: redis:7.4-alpine
+    container_name: omniq-redis-cluster-init
+    depends_on:
+      - omniq-redis-c1
+      - omniq-redis-c2
+      - omniq-redis-c3
+    restart: "no"
+    command:
+      - sh
+      - -lc
+      - |
+        set -eu
+
+        echo "DNS test:"
+        getent hosts omniq-redis-c1 || true
+        getent hosts omniq-redis-c2 || true
+        getent hosts omniq-redis-c3 || true
+
+        echo "waiting nodes..."
+        redis-cli -h omniq-redis-c1 -p 6379 ping
+        redis-cli -h omniq-redis-c2 -p 6379 ping
+        redis-cli -h omniq-redis-c3 -p 6379 ping
+
+        echo "creating cluster..."
+        redis-cli --cluster create \
+          omniq-redis-c1:6379 \
+          omniq-redis-c2:6379 \
+          omniq-redis-c3:6379 \
+          --cluster-replicas 0 \
+          --cluster-yes
+
+        echo "done."
+  
+  omniq-python:
+    image: python:3.12-slim
+    container_name: omniq-python
+    working_dir: /app
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./:/app
+    depends_on:
+      - omniq-redis-cluster-init
+    command: ["bash", "-lc", "tail -f /dev/null"]
+
+volumes:
+  redis_c1_data:
+  redis_c2_data:
+  redis_c3_data:

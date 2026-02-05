@@ -1,23 +1,35 @@
 import json
+import redis
+
 from dataclasses import dataclass
 from typing import Optional, Any
+from threading import Lock
 
 from .clock import now_ms
 from .ids import new_ulid
-from .types import PayloadT, ReservePaused, ReserveJob, ReserveResult, AckFailResult
+from .types import ReservePaused, ReserveJob, ReserveResult, AckFailResult
 from .transport import RedisLike
 from .scripts import OmniqScripts
+from .helper import queue_base, queue_anchor
 
 @dataclass
 class OmniqOps:
+    _script_lock = Lock()
     r: RedisLike
     scripts: OmniqScripts
 
-    @staticmethod
-    def queue_base(queue_name: str) -> str:
-        if "{" in queue_name and "}" in queue_name:
-            return queue_name
-        return "{" + queue_name + "}"
+    def _evalsha_with_noscript_fallback(
+        self,
+        sha: str,
+        src: str,
+        numkeys: int,
+        *keys_and_args: Any,
+    ):
+        try:
+            return self.r.evalsha(sha, numkeys, *keys_and_args)
+        except redis.exceptions.NoScriptError:
+            with self._script_lock:
+                return self.r.eval(src, numkeys, *keys_and_args)
 
     def publish(
         self,
@@ -39,7 +51,7 @@ class OmniqOps:
                 "Wrap strings as {'text': '...'} or {'value': '...'}."
             )
 
-        base = self.queue_base(queue)
+        anchor = queue_anchor(queue)
         nms = now_ms_override or now_ms()
 
         jid = job_id or new_ulid()
@@ -50,7 +62,6 @@ class OmniqOps:
         glimit_s = str(int(group_limit)) if group_limit and group_limit > 0 else "0"
 
         argv = [
-            base,
             jid,
             payload_s,
             str(int(max_attempts)),
@@ -62,8 +73,14 @@ class OmniqOps:
             glimit_s,
         ]
 
-        res = self.r.evalsha(self.scripts.enqueue_sha, 0, *argv)
-
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.enqueue.sha,
+            self.scripts.enqueue.src,
+            1,
+            anchor,
+            *argv,
+        )
+        
         if not isinstance(res, list) or len(res) < 2:
             raise RuntimeError(f"Unexpected ENQUEUE response: {res}")
 
@@ -76,27 +93,43 @@ class OmniqOps:
         return out_id
 
     def pause(self, *, queue: str) -> str:
-        base = self.queue_base(queue)
-        res = self.r.evalsha(self.scripts.pause_sha, 0, base)
+        anchor = queue_anchor(queue)
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.pause.sha,
+            self.scripts.pause.src,
+            1,
+            anchor
+        )
         return str(res)
 
     def resume(self, *, queue: str) -> int:
-        base = self.queue_base(queue)
-        res = self.r.evalsha(self.scripts.resume_sha, 0, base)
+        anchor = queue_anchor(queue)
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.resume.sha,
+            self.scripts.resume.src,
+            1,
+            anchor
+        )
         try:
             return int(res)
         except Exception:
             return 0
 
     def is_paused(self, *, queue: str) -> bool:
-        base = self.queue_base(queue)
+        base = queue_base(queue)
         return self.r.exists(base + ":paused") == 1
 
     def reserve(self, *, queue: str, now_ms_override: int = 0) -> ReserveResult:
-        base = self.queue_base(queue)
+        anchor = queue_anchor(queue)
         nms = now_ms_override or now_ms()
 
-        res = self.r.evalsha(self.scripts.reserve_sha, 0, base, str(int(nms)))
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.reserve.sha,
+            self.scripts.reserve.src,
+            1,
+            anchor,
+            str(int(nms)),
+        )
 
         if not isinstance(res, list) or len(res) < 1:
             raise RuntimeError(f"Unexpected RESERVE response: {res}")
@@ -121,10 +154,18 @@ class OmniqOps:
         )
 
     def heartbeat(self, *, queue: str, job_id: str, lease_token: str, now_ms_override: int = 0) -> int:
-        base = self.queue_base(queue)
+        anchor = queue_anchor(queue)
         nms = now_ms_override or now_ms()
 
-        res = self.r.evalsha(self.scripts.heartbeat_sha, 0, base, job_id, str(int(nms)), lease_token)
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.heartbeat.sha,
+            self.scripts.heartbeat.src,
+            1,
+            anchor,
+            job_id,
+            str(int(nms)),
+            lease_token
+        )
 
         if not isinstance(res, list) or len(res) < 1:
             raise RuntimeError(f"Unexpected HEARTBEAT response: {res}")
@@ -139,10 +180,18 @@ class OmniqOps:
         raise RuntimeError(f"Unexpected HEARTBEAT response: {res}")
 
     def ack_success(self, *, queue: str, job_id: str, lease_token: str, now_ms_override: int = 0) -> None:
-        base = self.queue_base(queue)
+        anchor = queue_anchor(queue)
         nms = now_ms_override or now_ms()
 
-        res = self.r.evalsha(self.scripts.ack_success_sha, 0, base, job_id, str(int(nms)), lease_token)
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.ack_success.sha,
+            self.scripts.ack_success.src,
+            1,
+            anchor,
+            job_id,
+            str(int(nms)),
+            lease_token
+        )
 
         if not isinstance(res, list) or len(res) < 1:
             raise RuntimeError(f"Unexpected ACK_SUCCESS response: {res}")
@@ -165,14 +214,31 @@ class OmniqOps:
         error: Optional[str] = None,
         now_ms_override: int = 0,
     ) -> AckFailResult:
-        base = self.queue_base(queue)
+        anchor = queue_anchor(queue)
         nms = now_ms_override or now_ms()
 
         if error is None or str(error).strip() == "":
-            res = self.r.evalsha(self.scripts.ack_fail_sha, 0, base, job_id, str(int(nms)), lease_token)
+            res = self._evalsha_with_noscript_fallback(
+                self.scripts.ack_fail.sha,
+                self.scripts.ack_fail.src,
+                1,
+                anchor,
+                job_id,
+                str(int(nms)),
+                lease_token
+            )
         else:
             err_s = str(error)
-            res = self.r.evalsha(self.scripts.ack_fail_sha, 0, base, job_id, str(int(nms)), lease_token, err_s)
+            res = self._evalsha_with_noscript_fallback(
+                self.scripts.ack_fail.sha,
+                self.scripts.ack_fail.src,
+                1,
+                anchor,
+                job_id,
+                str(int(nms)),
+                lease_token,
+                err_s
+            )
 
         if not isinstance(res, list) or len(res) < 1:
             raise RuntimeError(f"Unexpected ACK_FAIL response: {res}")
@@ -190,10 +256,17 @@ class OmniqOps:
         raise RuntimeError(f"Unexpected ACK_FAIL response: {res}")
 
     def promote_delayed(self, *, queue: str, max_promote: int = 1000, now_ms_override: int = 0) -> int:
-        base = self.queue_base(queue)
+        anchor = queue_anchor(queue)
         nms = now_ms_override or now_ms()
 
-        res = self.r.evalsha(self.scripts.promote_delayed_sha, 0, base, str(int(nms)), str(int(max_promote)))
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.promote_delayed.sha,
+            self.scripts.promote_delayed.src,
+            1,
+            anchor,
+            str(int(nms)),
+            str(int(max_promote))
+        )
 
         if not isinstance(res, list) or len(res) < 2 or res[0] != "OK":
             raise RuntimeError(f"Unexpected PROMOTE_DELAYED response: {res}")
@@ -201,10 +274,17 @@ class OmniqOps:
         return int(res[1])
 
     def reap_expired(self, *, queue: str, max_reap: int = 1000, now_ms_override: int = 0) -> int:
-        base = self.queue_base(queue)
+        anchor = queue_anchor(queue)
         nms = now_ms_override or now_ms()
 
-        res = self.r.evalsha(self.scripts.reap_expired_sha, 0, base, str(int(nms)), str(int(max_reap)))
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.reap_expired.sha,
+            self.scripts.reap_expired.src,
+            1,
+            anchor,
+            str(int(nms)),
+            str(int(max_reap))
+        )
 
         if not isinstance(res, list) or len(res) < 2 or res[0] != "OK":
             raise RuntimeError(f"Unexpected REAP_EXPIRED response: {res}")
@@ -212,7 +292,7 @@ class OmniqOps:
         return int(res[1])
 
     def job_timeout_ms(self, *, queue: str, job_id: str, default_ms: int = 60_000) -> int:
-        base = self.queue_base(queue)
+        base = queue_base(queue)
         k_job = base + ":job:" + job_id
         v = self.r.hget(k_job, "timeout_ms")
         try:

@@ -8,6 +8,15 @@ services:
     volumes:
       - redis_data:/data
 
+  omniq-valkey:
+    image: valkey/valkey:9-alpine
+    container_name: omniq-valkey
+    ports:
+      - "6380:6379"
+    command: ["valkey-server", "--appendonly", "yes"]
+    volumes:
+      - valkey_data:/data
+
   omniq-python:
     image: python:3.12-slim
     container_name: omniq-python
@@ -22,3 +31,4 @@ services:
 
 volumes:
   redis_data:
+  valkey_data:

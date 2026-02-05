@@ -1,0 +1,88 @@
+services:
+  omniq-valkey-c1:
+    image: valkey/valkey:9-alpine
+    container_name: omniq-valkey-c1
+    command: >
+      valkey-server
+      --appendonly yes
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - valkey_c1_data:/data
+
+  omniq-valkey-c2:
+    image: valkey/valkey:9-alpine
+    container_name: omniq-valkey-c2
+    command: >
+      valkey-server
+      --appendonly yes
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - valkey_c2_data:/data
+
+  omniq-valkey-c3:
+    image: valkey/valkey:9-alpine
+    container_name: omniq-valkey-c3
+    command: >
+      valkey-server
+      --appendonly yes
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - valkey_c3_data:/data
+
+  omniq-valkey-cluster-init:
+    image: valkey/valkey:9-alpine
+    container_name: omniq-valkey-cluster-init
+    depends_on:
+      - omniq-valkey-c1
+      - omniq-valkey-c2
+      - omniq-valkey-c3
+    restart: "no"
+    command:
+      - sh
+      - -lc
+      - |
+        set -eu
+
+        echo "waiting nodes..."
+        valkey-cli -h omniq-valkey-c1 -p 6379 ping
+        valkey-cli -h omniq-valkey-c2 -p 6379 ping
+        valkey-cli -h omniq-valkey-c3 -p 6379 ping
+
+        echo "creating cluster..."
+        valkey-cli --cluster create \
+          omniq-valkey-c1:6379 \
+          omniq-valkey-c2:6379 \
+          omniq-valkey-c3:6379 \
+          --cluster-replicas 0 \
+          --cluster-yes
+
+        echo "done."
+
+  omniq-python:
+    image: python:3.12-slim
+    container_name: omniq-python
+    working_dir: /app
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./:/app
+    depends_on:
+      - omniq-valkey-cluster-init
+    command: ["bash", "-lc", "tail -f /dev/null"]
+
+volumes:
+  valkey_c1_data:
+  valkey_c2_data:
+  valkey_c3_data:

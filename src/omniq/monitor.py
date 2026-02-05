@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import List
 
+from .helper import as_str, queue_base
+
 @dataclass(frozen=True)
 class QueueCounts:
     paused: bool
@@ -10,13 +12,11 @@ class QueueCounts:
     completed: int
     failed: int
 
-
 @dataclass(frozen=True)
 class GroupStatus:
     gid: str
     inflight: int
     limit: int
-
 
 @dataclass(frozen=True)
 class ActiveSample:
@@ -25,7 +25,6 @@ class ActiveSample:
     lock_until_ms: int
     attempt: int
 
-
 @dataclass(frozen=True)
 class DelayedSample:
     job_id: str
@@ -33,16 +32,19 @@ class DelayedSample:
     due_ms: int
     attempt: int
 
-
 class QueueMonitor:
     def __init__(self, uq):
         self._uq = uq
-        self._r = getattr(uq, "r", None) or getattr(getattr(uq, "ops", None), "r", None) or getattr(getattr(uq, "_ops", None), "r", None)
+        self._r = (
+            getattr(uq, "r", None)
+            or getattr(getattr(uq, "ops", None), "r", None)
+            or getattr(getattr(uq, "_ops", None), "r", None)
+        )
         if self._r is None:
             raise ValueError("QueueMonitor needs redis access (inject from server, do not expose to UI callers).")
 
     def _base(self, queue: str) -> str:
-        return self._uq.queue_base(queue)
+        return queue_base(queue)
 
     def counts(self, queue: str) -> QueueCounts:
         base = self._base(queue)
@@ -71,7 +73,7 @@ class QueueMonitor:
         limit = max(1, min(int(limit), 2000))
         try:
             gids = r.zrange(f"{base}:groups:ready", 0, limit - 1)
-            return [g for g in gids if g]
+            return [as_str(g) for g in gids if g]
         except Exception:
             return []
 
@@ -81,16 +83,15 @@ class QueueMonitor:
 
         out: List[GroupStatus] = []
         for gid in gids:
-            inflight = int(r.get(f"{base}:g:{gid}:inflight") or "0")
+            gid_s = as_str(gid)
 
-            raw = r.get(f"{base}:g:{gid}:limit")
-            try:
-                gl = int(raw) if raw else 0
-            except Exception:
-                gl = 0
+            inflight = int(as_str(r.get(f"{base}:g:{gid_s}:inflight")) or "0")
+
+            raw = r.get(f"{base}:g:{gid_s}:limit")
+            gl = int(as_str(raw) or "0")
             limit = gl if gl > 0 else int(default_limit)
 
-            out.append(GroupStatus(gid=str(gid), inflight=inflight, limit=limit))
+            out.append(GroupStatus(gid=gid_s, inflight=inflight, limit=limit))
         return out
 
     def sample_active(self, queue: str, limit: int = 50) -> List[ActiveSample]:
@@ -102,15 +103,17 @@ class QueueMonitor:
         out: List[ActiveSample] = []
 
         for jid in job_ids:
-            k_job = f"{base}:job:{jid}"
+            jid_s = as_str(jid)
+            k_job = f"{base}:job:{jid_s}"
             gid, attempt = r.hmget(k_job, "gid", "attempt")
             score = r.zscore(f"{base}:active", jid) or 0
+
             out.append(
                 ActiveSample(
-                    job_id=str(jid),
-                    gid=str(gid or ""),
+                    job_id=jid_s,
+                    gid=as_str(gid),
                     lock_until_ms=int(score),
-                    attempt=int(attempt or 0),
+                    attempt=int(as_str(attempt) or "0"),
                 )
             )
         return out
@@ -124,15 +127,17 @@ class QueueMonitor:
         out: List[DelayedSample] = []
 
         for jid in job_ids:
-            k_job = f"{base}:job:{jid}"
+            jid_s = as_str(jid)
+            k_job = f"{base}:job:{jid_s}"
             gid, attempt = r.hmget(k_job, "gid", "attempt")
             due = r.zscore(f"{base}:delayed", jid) or 0
+
             out.append(
                 DelayedSample(
-                    job_id=str(jid),
-                    gid=str(gid or ""),
+                    job_id=jid_s,
+                    gid=as_str(gid),
                     due_ms=int(due),
-                    attempt=int(attempt or 0),
+                    attempt=int(as_str(attempt) or "0"),
                 )
             )
         return out

@@ -11,20 +11,13 @@ from .types import JobCtx, ReserveJob
 @dataclass
 class StopController:
     stop: bool = False
+    sigint_count: int = 0
 
 @dataclass
 class HeartbeatHandle:
     stop_evt: threading.Event
     flags: Dict[str, bool]
     thread: threading.Thread
-
-def _install_sigterm_handler(ctrl: StopController, logger, verbose: bool) -> None:
-    def on_sigterm(signum, _frame):
-        ctrl.stop = True
-        if verbose:
-            _safe_log(logger, f"[consume] SIGTERM received (stopping...)")
-
-    signal.signal(signal.SIGTERM, on_sigterm)
 
 def start_heartbeater(
     ops: OmniqOps,
@@ -61,13 +54,11 @@ def start_heartbeater(
     t.start()
     return HeartbeatHandle(stop_evt=stop_evt, flags=flags, thread=t)
 
-
 def _safe_log(logger: Callable[[str], None], msg: str) -> None:
     try:
         logger(msg)
     except Exception:
         pass
-
 
 def _payload_preview(payload: Any, max_len: int = 300) -> str:
     try:
@@ -94,38 +85,12 @@ def consume(
     stop_on_ctrl_c: bool = True,
     drain: bool = True,
 ) -> None:
-    """
-    Shutdown semantics:
-
-    - drain=True:
-        Ctrl+C (SIGINT) requests stop AFTER current job finishes.
-        We override SIGINT so it does NOT raise KeyboardInterrupt (graceful).
-        Second Ctrl+C => hard exit.
-
-    - drain=False:
-        Ctrl+C raises KeyboardInterrupt normally (fast stop).
-        We do NOT override SIGINT.
-        SIGTERM always requests stop; if drain=False we exit ASAP after reserve.
-
-    Notes:
-    - We cannot force-stop user code safely. drain=False relies on KeyboardInterrupt to interrupt sleep/py code.
-    """
-
     last_promote = 0.0
     last_reap = 0.0
 
-    # ensure StopController has sigint_count
-    if not hasattr(StopController, "__annotations__") or "sigint_count" not in getattr(StopController, "__annotations__", {}):
-        # fallback: still works without sigint_count, but no "double Ctrl+C" behavior
-        ctrl = StopController(stop=False)  # type: ignore
-        ctrl.sigint_count = 0  # type: ignore
-    else:
-        ctrl = StopController(stop=False, sigint_count=0)  # type: ignore
+    ctrl = StopController(stop=False, sigint_count=0)
 
-    if stop_on_ctrl_c:
-        import signal
-
-        # Always handle SIGTERM (docker/k8s stop)
+    if stop_on_ctrl_c and threading.current_thread() is threading.main_thread():
         def on_sigterm(signum, _frame):
             ctrl.stop = True
             if verbose:
@@ -134,9 +99,6 @@ def consume(
         signal.signal(signal.SIGTERM, on_sigterm)
 
         if drain:
-            # drain=True: override SIGINT so handler is NOT interrupted.
-            # first Ctrl+C => request stop-after-job
-            # second Ctrl+C => hard exit (KeyboardInterrupt)
             prev = signal.getsignal(signal.SIGINT)
 
             def on_sigint(signum, frame):
@@ -144,7 +106,6 @@ def consume(
                 if ctrl.sigint_count >= 2:
                     if verbose:
                         _safe_log(logger, f"[consume] SIGINT x2; hard exit now. queue={queue}")
-                    # restore default and re-raise via default behavior
                     try:
                         signal.signal(signal.SIGINT, prev if prev else signal.SIG_DFL)
                     except Exception:
@@ -157,12 +118,10 @@ def consume(
 
             signal.signal(signal.SIGINT, on_sigint)
         else:
-            # drain=False: do NOT override SIGINT
             pass
 
     try:
         while True:
-            # if stop requested and idle, exit
             if ctrl.stop:
                 if verbose:
                     _safe_log(logger, f"[consume] stop requested; exiting (idle). queue={queue}")
@@ -207,15 +166,11 @@ def consume(
                 time.sleep(0.2)
                 continue
 
-            # if stop requested right after reserve:
-            # - drain=False => exit ASAP (no handler, no ack, stop heartbeats)
-            # - drain=True  => process this one job, then exit after ack
             if ctrl.stop and not drain:
                 if verbose:
                     _safe_log(logger, f"[consume] stop requested; fast-exit after reserve job_id={res.job_id}")
                 return
 
-            # payload is JSON (contract). keep defensive fallback.
             try:
                 payload_obj: Any = json.loads(res.payload)
             except Exception:
@@ -237,7 +192,6 @@ def consume(
                 gid_s = ctx.gid or "-"
                 _safe_log(logger, f"[consume] received job_id={ctx.job_id} attempt={ctx.attempt} gid={gid_s} payload={pv}")
 
-            # heartbeat cadence
             if heartbeat_interval_s is not None:
                 hb_s = float(heartbeat_interval_s)
             else:
@@ -267,8 +221,6 @@ def consume(
                             _safe_log(logger, f"[consume] ack success error job_id={ctx.job_id}: {e}")
 
             except KeyboardInterrupt:
-                # This only happens in drain=False mode (SIGINT not overridden),
-                # or on double Ctrl+C in drain=True mode.
                 if verbose:
                     _safe_log(logger, f"[consume] KeyboardInterrupt; exiting now. queue={queue}")
                 hb.stop_evt.set()
@@ -302,17 +254,12 @@ def consume(
                 except Exception:
                     pass
 
-            # drain=True: if stop requested (SIGTERM or Ctrl+C), exit after finishing this job
             if ctrl.stop and drain:
                 if verbose:
                     _safe_log(logger, f"[consume] stop requested; exiting after draining job_id={ctx.job_id}")
                 return
 
     except KeyboardInterrupt:
-        # Ctrl+C while idle in drain=False mode, or double Ctrl+C in drain=True mode
         if verbose:
             _safe_log(logger, f"[consume] KeyboardInterrupt (outer); exiting now. queue={queue}")
         return
-
-
-
