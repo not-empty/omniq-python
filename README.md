@@ -1,31 +1,40 @@
 # OmniQ (Python)
 
-**OmniQ** is a Redis + Lua, language-agnostic job queue. This package is the **Python client** for OmniQ v1.
+**OmniQ** is a Redis + Lua, language-agnostic job queue. This package is
+the **Python client** for OmniQ v1.
 
 Key ideas:
 
-- **Hybrid lanes**: ungrouped jobs by default, optional **grouped** jobs (FIFO per group + per-group concurrency).
-- **Lease-based execution**: workers reserve a job with a time-limited lease.
-- **Token-gated ACK/heartbeat**: `reserve()` returns a `lease_token` that must be used by `heartbeat()` and `ack_*()`.
-- **Pause / resume (flag-only)**: pausing a queue prevents *new reserves*; it does **not** move jobs or stop running jobs.
+-   **Hybrid lanes**: ungrouped jobs by default, optional **grouped**
+    jobs (FIFO per group + per-group concurrency).
+-   **Lease-based execution**: workers reserve a job with a time-limited
+    lease.
+-   **Token-gated ACK/heartbeat**: `reserve()` returns a `lease_token`
+    that must be used by `heartbeat()` and `ack_*()`.
+-   **Pause / resume (flag-only)**: pausing a queue prevents *new
+    reserves*; it does **not** move jobs or stop running jobs.
+-   **Admin-safe operations**: strict `remove`, `remove_batch`, `retry`,
+    and `retry_batch` operations.
+-   **Handler-driven completion primitive**: `check_completion` for
+    parent/child workflows.
 
 Core project / docs: https://github.com/not-empty/omniq
 
----
+------------------------------------------------------------------------
 
 ## Install
 
-```bash
+``` bash
 pip install omniq
 ```
 
----
+------------------------------------------------------------------------
 
 ## Quick start
 
 ### Publish
 
-```python
+``` python
 from omniq.client import OmniqClient
 
 uq = OmniqClient(
@@ -44,7 +53,7 @@ print("OK", job_id)
 
 ### Consume
 
-```python
+``` python
 import time
 from omniq.client import OmniqClient
 
@@ -66,141 +75,179 @@ uq.consume(
 )
 ```
 
----
+------------------------------------------------------------------------
 
 ## Client initialization
 
-You can connect using a **redis URL** or the standard host/port fields.
-
-```python
+``` python
 from omniq.client import OmniqClient
 
 # Option A: host/port
 uq = OmniqClient(host="localhost", port=6379, db=0)
 
-# Option B: Redis URL (recommended for TLS / auth)
+# Option B: Redis URL
 uq = OmniqClient(redis_url="redis://:password@localhost:6379/0")
 ```
 
-> The client automatically loads the Lua scripts on first use (or during init).
+------------------------------------------------------------------------
 
----
+# Administrative Operations
 
-## Main API
+These operations are **strict and atomic (Lua-backed)**.
 
-All methods below are on `OmniqClient`.
+## retry_failed()
 
-### publish()
+Retry a single failed job (resets `attempt=0` and moves back to
+waiting).
 
-Enqueue a job.
+``` python
+uq.retry_failed(queue="demo", job_id="01ABC...")
+```
 
-```python
-job_id = uq.publish(
+-   Only works if job `state == "failed"`.
+-   Safe under grouping rules.
+
+------------------------------------------------------------------------
+
+## retry_failed_batch()
+
+Retry up to **100 failed jobs** atomically.
+
+``` python
+results = uq.retry_failed_batch(
     queue="demo",
-    payload={"hello": "world"},     # must be dict or list
-    job_id=None,                   # optional ULID (generated if omitted)
-    max_attempts=3,
-    timeout_ms=60_000,
-    backoff_ms=5_000,
-    due_ms=0,                      # schedule in the future (ms since epoch)
-    gid=None,                      # optional group id (string)
-    group_limit=0,                 # lazily initialize per-group limit (>0)
+    job_ids=["01A...", "01B...", "01C..."]
+)
+
+for job_id, status, reason in results:
+    print(job_id, status, reason)
+```
+
+-   Max 100 jobs per call.
+-   Returns per-job result.
+-   Jobs not in `failed` state return `ERR NOT_FAILED`.
+
+------------------------------------------------------------------------
+
+## remove_job()
+
+Remove a single non-active job from a specific lane.
+
+``` python
+uq.remove_job(
+    queue="demo",
+    job_id="01ABC...",
+    lane="failed",   # wait | delayed | failed | completed | gwait
 )
 ```
 
-Notes:
+Rules:
 
-- `payload` **must be** a `dict` or `list` (structured JSON). Passing a raw string is an error.
-- If `gid` is provided, the job goes into that group’s FIFO lane. Group concurrency is controlled by `group_limit` (first writer wins).
+-   Cannot remove `active` jobs.
+-   Lane must match job state.
+-   Group safety is preserved.
 
----
+------------------------------------------------------------------------
 
-### pause(), resume(), is_paused()
+## remove_jobs_batch()
 
-Pause/resume is a **queue-level flag**.
+Remove up to **100 jobs** from a specific lane.
 
-```python
-uq.pause(queue="demo")
-print(uq.is_paused(queue="demo"))  # True
-uq.resume(queue="demo")
-```
-
-Behavior:
-
-- Pause does **not** move jobs.
-- Pause does **not** affect running jobs.
-- Pause only blocks **new reserves** (reserve returns `PAUSED`).
-
----
-
-## consume() helper
-
-`consume()` is a convenience loop that:
-
-- periodically runs `promote_delayed` + `reap_expired`
-- calls `reserve()`
-- runs your `handler(ctx)`
-- heartbeats while the handler runs
-- ACKs success / fail using the job’s `lease_token`
-
-```python
-uq.consume(
+``` python
+results = uq.remove_jobs_batch(
     queue="demo",
-    handler=handler,              # handler(ctx)
-    poll_interval_s=0.05,
-    promote_interval_s=1.0,
-    promote_batch=1000,
-    reap_interval_s=1.0,
-    reap_batch=1000,
-    heartbeat_interval_s=None,    # None => derived from timeout_ms/2 (clamped)
-    verbose=False,
-    drain=True,                   # drain=True => finish current job on Ctrl+C then exit
+    lane="failed",
+    job_ids=["01A...", "01B...", "01C..."]
 )
+
+for job_id, status, reason in results:
+    print(job_id, status, reason)
 ```
 
-### Handler context
+-   Strict lane validation.
+-   Atomic per batch.
+-   Safe for grouped jobs.
 
-Your handler receives a `ctx` object with:
+------------------------------------------------------------------------
 
-- `queue`
-- `job_id`
-- `payload_raw` (JSON string)
-- `payload` (parsed dict/list)
-- `attempt`
-- `lock_until_ms`
-- `lease_token`
-- `gid`
+# Handler Context
 
----
+Inside `handler(ctx)` you receive:
+
+-   `queue`
+-   `job_id`
+-   `payload_raw`
+-   `payload`
+-   `attempt`
+-   `lock_until_ms`
+-   `lease_token`
+-   `gid`
+-   `check_completion`
+
+------------------------------------------------------------------------
+
+# check_completion (Parent / Child workflows)
+
+A **handler-driven primitive** for parallel fan-out workflows.
+
+No TTL. Cleanup occurs only when the counter reaches zero.
+
+## Parent Example
+
+``` python
+def parent_handler(ctx):
+    document_id = ctx.payload["document_id"]
+    pages = ctx.payload["pages"]
+
+    key = f"document:{document_id}"
+
+    ctx.check_completion.InitJobCounter(key, pages)
+
+    for p in range(1, pages + 1):
+        uq.publish(
+            queue="pages",
+            payload={
+                "document_id": document_id,
+                "page": p,
+                "completion_key": key,
+            },
+        )
+```
+
+## Child Example
+
+``` python
+def page_handler(ctx):
+    key = ctx.payload["completion_key"]
+
+    # do work...
+    remaining = ctx.check_completion.JobDecrement(key)
+
+    if remaining == 0:
+        print("Last page finished.")
+```
+
+Properties:
+
+-   Idempotent decrement (safe under retries).
+-   No accidental completion.
+-   Cross-queue safe.
+-   Fully user-controlled business logic.
+
+------------------------------------------------------------------------
 
 ## Grouped jobs (FIFO + concurrency)
 
-If you pass a `gid` when publishing, jobs are routed to that group.
-
-```python
+``` python
 uq.publish(queue="demo", payload={"i": 1}, gid="company:acme", group_limit=2)
 uq.publish(queue="demo", payload={"i": 2}, gid="company:acme")
 ```
 
-- FIFO ordering is preserved **within** each group.
-- Groups can run concurrently with each other.
-- Concurrency **within** a group is limited by `group_limit` (or the queue default set in the core config).
+-   FIFO inside group
+-   Groups run in parallel
+-   Concurrency limited per group
 
----
-
-## Queue configuration (v1 defaults)
-
-OmniQ v1 supports per-job overrides and queue defaults such as:
-
-- `timeout_ms` (lease duration)
-- `max_attempts`
-- `backoff_ms`
-- `completed_keep` (retention size)
-
-See the core docs for the full contract and configuration details:
-https://github.com/not-empty/omniq
-
----
+------------------------------------------------------------------------
 
 ## License
 
