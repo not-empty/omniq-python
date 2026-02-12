@@ -1,24 +1,30 @@
 # OmniQ (Python)
 
-**OmniQ** is a Redis + Lua, language-agnostic job queue. This package is
-the **Python client** for OmniQ v1.
-
-Key ideas:
-
--   **Hybrid lanes**: ungrouped jobs by default, optional **grouped**
-    jobs (FIFO per group + per-group concurrency).
--   **Lease-based execution**: workers reserve a job with a time-limited
-    lease.
--   **Token-gated ACK/heartbeat**: `reserve()` returns a `lease_token`
-    that must be used by `heartbeat()` and `ack_*()`.
--   **Pause / resume (flag-only)**: pausing a queue prevents *new
-    reserves*; it does **not** move jobs or stop running jobs.
--   **Admin-safe operations**: strict `remove`, `remove_batch`, `retry`,
-    and `retry_batch` operations.
--   **Handler-driven completion primitive**: `check_completion` for
-    parent/child workflows.
+**OmniQ** is a Redis + Lua, language-agnostic job queue.\
+This package is the **Python client** for OmniQ v1.
 
 Core project / docs: https://github.com/not-empty/omniq
+
+------------------------------------------------------------------------
+
+## Key Ideas
+
+-   **Hybrid lanes**
+    -   Ungrouped jobs by default
+    -   Optional grouped jobs (FIFO per group + per-group concurrency)
+-   **Lease-based execution**
+    -   Workers reserve a job with a time-limited lease
+-   **Token-gated ACK / heartbeat**
+    -   `reserve()` returns a `lease_token`
+    -   `heartbeat()` and `ack_*()` must include the same token
+-   **Pause / resume (flag-only)**
+    -   Pausing prevents *new reserves*
+    -   Running jobs are not interrupted
+    -   Jobs are not moved
+-   **Admin-safe operations**
+    -   Strict `retry`, `retry_batch`, `remove`, `remove_batch`
+-   **Handler-driven completion primitive**
+    -   `check_completion` for parent/child workflows
 
 ------------------------------------------------------------------------
 
@@ -30,7 +36,7 @@ pip install omniq
 
 ------------------------------------------------------------------------
 
-## Quick start
+## Quick Start
 
 ### Publish
 
@@ -51,6 +57,8 @@ job_id = uq.publish(
 print("OK", job_id)
 ```
 
+------------------------------------------------------------------------
+
 ### Consume
 
 ``` python
@@ -62,10 +70,7 @@ def handler(ctx):
     time.sleep(2)
     print("Done")
 
-uq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
+uq = OmniqClient(host="omniq-redis", port=6379)
 
 uq.consume(
     queue="demo",
@@ -77,11 +82,9 @@ uq.consume(
 
 ------------------------------------------------------------------------
 
-## Client initialization
+## Client Initialization
 
 ``` python
-from omniq.client import OmniqClient
-
 # Option A: host/port
 uq = OmniqClient(host="localhost", port=6379, db=0)
 
@@ -93,25 +96,21 @@ uq = OmniqClient(redis_url="redis://:password@localhost:6379/0")
 
 # Administrative Operations
 
-These operations are **strict and atomic (Lua-backed)**.
+All admin operations are **Lua-backed and atomic**.
 
 ## retry_failed()
-
-Retry a single failed job (resets `attempt=0` and moves back to
-waiting).
 
 ``` python
 uq.retry_failed(queue="demo", job_id="01ABC...")
 ```
 
--   Only works if job `state == "failed"`.
--   Safe under grouping rules.
+-   Works only if job state is `failed`
+-   Resets attempt counter
+-   Respects grouping rules
 
 ------------------------------------------------------------------------
 
 ## retry_failed_batch()
-
-Retry up to **100 failed jobs** atomically.
 
 ``` python
 results = uq.retry_failed_batch(
@@ -123,35 +122,31 @@ for job_id, status, reason in results:
     print(job_id, status, reason)
 ```
 
--   Max 100 jobs per call.
--   Returns per-job result.
--   Jobs not in `failed` state return `ERR NOT_FAILED`.
+-   Max 100 jobs per call
+-   Atomic batch
+-   Per-job result returned
 
 ------------------------------------------------------------------------
 
 ## remove_job()
 
-Remove a single non-active job from a specific lane.
-
 ``` python
 uq.remove_job(
     queue="demo",
     job_id="01ABC...",
-    lane="failed",   # wait | delayed | failed | completed | gwait
+    lane="failed",  # wait | delayed | failed | completed | gwait
 )
 ```
 
 Rules:
 
--   Cannot remove `active` jobs.
--   Lane must match job state.
--   Group safety is preserved.
+-   Cannot remove active jobs
+-   Lane must match job state
+-   Group safety preserved
 
 ------------------------------------------------------------------------
 
 ## remove_jobs_batch()
-
-Remove up to **100 jobs** from a specific lane.
 
 ``` python
 results = uq.remove_jobs_batch(
@@ -159,20 +154,17 @@ results = uq.remove_jobs_batch(
     lane="failed",
     job_ids=["01A...", "01B...", "01C..."]
 )
-
-for job_id, status, reason in results:
-    print(job_id, status, reason)
 ```
 
--   Strict lane validation.
--   Atomic per batch.
--   Safe for grouped jobs.
+-   Max 100 per call
+-   Strict lane validation
+-   Atomic per batch
 
 ------------------------------------------------------------------------
 
 # Handler Context
 
-Inside `handler(ctx)` you receive:
+Inside `handler(ctx)`:
 
 -   `queue`
 -   `job_id`
@@ -186,11 +178,11 @@ Inside `handler(ctx)` you receive:
 
 ------------------------------------------------------------------------
 
-# check_completion (Parent / Child workflows)
+# check_completion (Parent / Child Workflows)
 
-A **handler-driven primitive** for parallel fan-out workflows.
+A handler-driven primitive for fan-out workflows.
 
-No TTL. Cleanup occurs only when the counter reaches zero.
+No TTL. Cleanup happens only when counter reaches zero.
 
 ## Parent Example
 
@@ -201,7 +193,7 @@ def parent_handler(ctx):
 
     key = f"document:{document_id}"
 
-    ctx.check_completion.InitJobCounter(key, pages)
+    ctx.check_completion.init_job_counter(key, pages)
 
     for p in range(1, pages + 1):
         uq.publish(
@@ -220,8 +212,7 @@ def parent_handler(ctx):
 def page_handler(ctx):
     key = ctx.payload["completion_key"]
 
-    # do work...
-    remaining = ctx.check_completion.JobDecrement(key)
+    remaining = ctx.check_completion.job_decrement(key)
 
     if remaining == 0:
         print("Last page finished.")
@@ -229,14 +220,14 @@ def page_handler(ctx):
 
 Properties:
 
--   Idempotent decrement (safe under retries).
--   No accidental completion.
--   Cross-queue safe.
--   Fully user-controlled business logic.
+-   Idempotent decrement
+-   Safe under retries
+-   Cross-queue safe
+-   Fully business-logic driven
 
 ------------------------------------------------------------------------
 
-## Grouped jobs (FIFO + concurrency)
+## Grouped Jobs
 
 ``` python
 uq.publish(queue="demo", payload={"i": 1}, gid="company:acme", group_limit=2)
@@ -244,7 +235,7 @@ uq.publish(queue="demo", payload={"i": 2}, gid="company:acme")
 ```
 
 -   FIFO inside group
--   Groups run in parallel
+-   Groups execute in parallel
 -   Concurrency limited per group
 
 ------------------------------------------------------------------------

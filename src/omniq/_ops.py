@@ -467,28 +467,39 @@ class OmniqOps:
     def check_completion_job_decrement(self, *, key: str, child_id: str) -> int:
         anchor = check_completion_anchor(key)
 
-        res = self._evalsha_with_noscript_fallback(
-            self.scripts.check_completion_decrement.sha,
-            self.scripts.check_completion_decrement.src,
-            1,
-            anchor,
-            str(child_id),
-        )
+        cid = (str(child_id) if child_id is not None else "").strip()
+        if not cid:
+            raise ValueError("check_completion child_id is required")
 
-        if not isinstance(res, list) or len(res) < 2:
-            raise RuntimeError(f"Unexpected CHECK_COMPLETION_DECREMENT response: {res}")
+        try:
+            res = self._evalsha_with_noscript_fallback(
+                self.scripts.check_completion_decrement.sha,
+                self.scripts.check_completion_decrement.src,
+                1,
+                anchor,
+                cid,
+            )
+        except Exception:
+            return -1
+        try:
+            if not isinstance(res, list) or len(res) < 1:
+                return -1
 
-        if res[0] == "OK":
-            try:
-                return int(res[1])
-            except Exception:
-                raise RuntimeError(f"Unexpected CHECK_COMPLETION_DECREMENT remaining: {res}")
+            if res[0] == "OK":
+                if len(res) < 2:
+                    return -1
+                try:
+                    return int(res[1])
+                except Exception:
+                    return -1
 
-        if res[0] == "ERR":
-            reason = str(res[1]) if len(res) > 1 else "UNKNOWN"
-            raise RuntimeError(f"CHECK_COMPLETION_DECREMENT failed: {reason}")
+            if res[0] == "ERR":
+                return -1
 
-        raise RuntimeError(f"Unexpected CHECK_COMPLETION_DECREMENT response: {res}")
+            return -1
+        except Exception:
+            return -1
+
 
     @staticmethod
     def paused_backoff_s(poll_interval_s: float) -> float:
