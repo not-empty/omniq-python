@@ -17,6 +17,7 @@ class RedisLike(Protocol):
     def exists(self, key: str) -> int: ...
     def hget(self, key: str, field: str) -> Optional[str]: ...
     def llen(self, key: str) -> int: ...
+    def lrange(self, key: str, start: int, end: int) -> list[Optional[str]]: ...
     def zcard(self, key: str) -> int: ...
     def zrange(self, key: str, start: int, end: int) -> list[Optional[str]]: ...
     def get(self, key: str) -> Optional[str]: ...
@@ -35,7 +36,6 @@ class RedisConnOpts:
     socket_timeout: Optional[float] = None
     socket_connect_timeout: Optional[float] = None
 
-
 def _looks_like_cluster_error(e: Exception) -> bool:
     msg = str(e).lower()
 
@@ -49,7 +49,6 @@ def _looks_like_cluster_error(e: Exception) -> bool:
         or "moved" in msg
         or "ask" in msg
     )
-
 
 def build_redis_client(opts: RedisConnOpts) -> redis.Redis:
     if opts.redis_url:

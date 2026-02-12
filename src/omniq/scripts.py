@@ -21,6 +21,12 @@ class OmniqScripts:
     heartbeat: ScriptDef
     pause: ScriptDef
     resume: ScriptDef
+    retry_failed: ScriptDef
+    retry_failed_batch: ScriptDef
+    remove_job: ScriptDef
+    remove_jobs_batch: ScriptDef
+    check_completion_init: ScriptDef
+    check_completion_decrement: ScriptDef
 
 def default_scripts_dir() -> str:
     here = os.path.dirname(__file__)
@@ -31,7 +37,7 @@ def load_scripts(r: ScriptLoader, scripts_dir: str) -> OmniqScripts:
         path = os.path.join(scripts_dir, name)
         with open(path, "r", encoding="utf-8") as f:
             src = f.read()
-        sha = r.script_load(src)  # loads into *some* node cache (fine)
+        sha = r.script_load(src)
         return ScriptDef(sha=sha, src=src)
 
     return OmniqScripts(
@@ -44,4 +50,10 @@ def load_scripts(r: ScriptLoader, scripts_dir: str) -> OmniqScripts:
         heartbeat=load_one("heartbeat.lua"),
         pause=load_one("pause.lua"),
         resume=load_one("resume.lua"),
+        retry_failed=load_one("retry_failed.lua"),
+        retry_failed_batch=load_one("retry_failed_batch.lua"),
+        remove_job=load_one("remove_job.lua"),
+        remove_jobs_batch=load_one("remove_jobs_batch.lua"),
+        check_completion_init=load_one("check_completion_init.lua"),
+        check_completion_decrement=load_one("check_completion_decrement.lua"),
     )

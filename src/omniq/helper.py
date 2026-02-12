@@ -15,3 +15,15 @@ def as_str(v: Any) -> str:
         return v.decode("utf-8", errors="replace")
     return str(v)
 
+def check_completion_anchor(key: str, max_len: int = 128) -> str:
+    k = (key or "").strip()
+    if not k:
+        raise ValueError("check_completion key is required")
+
+    if "{" in k or "}" in k:
+        raise ValueError("check_completion key must not contain '{' or '}'")
+
+    if len(k) > max_len:
+        raise ValueError(f"check_completion key too long (max {max_len} chars)")
+
+    return "{cc:" + k + "}:meta"

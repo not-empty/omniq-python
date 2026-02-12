@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 from .helper import as_str, queue_base
 
@@ -31,6 +31,31 @@ class DelayedSample:
     gid: str
     due_ms: int
     attempt: int
+
+@dataclass(frozen=True)
+class FailedSample:
+    job_id: str
+    gid: str
+    attempt: int
+    max_attempts: int
+    failed_at_ms: int
+    last_error: str
+
+@dataclass(frozen=True)
+class JobInfo:
+    job_id: str
+    state: str
+    gid: str
+    attempt: int
+    max_attempts: int
+    timeout_ms: int
+    backoff_ms: int
+    lease_token: str
+    lock_until_ms: int
+    due_ms: int
+    payload: str
+    last_error: str
+    updated_ms: int
 
 class QueueMonitor:
     def __init__(self, uq):
@@ -141,3 +166,86 @@ class QueueMonitor:
                 )
             )
         return out
+
+    def sample_failed(self, queue: str, limit: int = 50) -> List[FailedSample]:
+        base = self._base(queue)
+        r = self._r
+        limit = max(1, min(int(limit), 500))
+
+        try:
+            job_ids = r.lrange(f"{base}:failed", 0, limit - 1)
+        except Exception:
+            return []
+
+        out: List[FailedSample] = []
+
+        for jid in job_ids:
+            jid_s = as_str(jid)
+            k_job = f"{base}:job:{jid_s}"
+
+            try:
+                gid, attempt, max_attempts, last_error, last_error_ms, updated_ms = r.hmget(
+                    k_job,
+                    "gid",
+                    "attempt",
+                    "max_attempts",
+                    "last_error",
+                    "last_error_ms",
+                    "updated_ms",
+                )
+            except Exception:
+                gid = attempt = max_attempts = last_error = last_error_ms = updated_ms = None
+
+            fam = int(as_str(last_error_ms) or "0")
+            if fam <= 0:
+                fam = int(as_str(updated_ms) or "0")
+
+            out.append(
+                FailedSample(
+                    job_id=jid_s,
+                    gid=as_str(gid),
+                    attempt=int(as_str(attempt) or "0"),
+                    max_attempts=int(as_str(max_attempts) or "0"),
+                    failed_at_ms=fam,
+                    last_error=as_str(last_error),
+                )
+            )
+
+        return out
+
+    def get_job(self, queue: str, job_id: str) -> Optional[JobInfo]:
+        base = self._base(queue)
+        r = self._r
+        jid_s = as_str(job_id)
+        k_job = f"{base}:job:{jid_s}"
+
+        if r.exists(k_job) != 1:
+            return None
+
+        fields = [
+            "state", "gid", "attempt", "max_attempts", "timeout_ms", "backoff_ms",
+            "lease_token", "lock_until_ms", "due_ms", "payload", "last_error", "updated_ms",
+        ]
+
+        try:
+            vals = r.hmget(k_job, *fields)
+        except Exception:
+            return None
+
+        m = {fields[i]: vals[i] for i in range(len(fields))}
+
+        return JobInfo(
+            job_id=jid_s,
+            state=as_str(m["state"]),
+            gid=as_str(m["gid"]),
+            attempt=int(as_str(m["attempt"]) or "0"),
+            max_attempts=int(as_str(m["max_attempts"]) or "0"),
+            timeout_ms=int(as_str(m["timeout_ms"]) or "0"),
+            backoff_ms=int(as_str(m["backoff_ms"]) or "0"),
+            lease_token=as_str(m["lease_token"]),
+            lock_until_ms=int(as_str(m["lock_until_ms"]) or "0"),
+            due_ms=int(as_str(m["due_ms"]) or "0"),
+            payload=as_str(m["payload"]),
+            last_error=as_str(m["last_error"]),
+            updated_ms=int(as_str(m["updated_ms"]) or "0"),
+        )

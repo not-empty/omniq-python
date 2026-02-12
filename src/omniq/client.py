@@ -102,6 +102,18 @@ class OmniqClient:
     def is_paused(self, *, queue: str) -> bool:
         return self._ops.is_paused(queue=queue)
 
+    def retry_failed(self, *, queue: str, job_id: str, now_ms_override: int = 0) -> None:
+        return self._ops.retry_failed(queue=queue, job_id=job_id, now_ms_override=now_ms_override)
+
+    def retry_failed_batch(self, *, queue: str, job_ids: list[str], now_ms_override: int = 0) -> None:
+        return self._ops.retry_failed_batch(queue=queue, job_ids=job_ids, now_ms_override=now_ms_override)
+
+    def remove_job(self, *, queue: str, job_id: str, lane: str) -> None:
+        return self._ops.remove_job(queue=queue, job_id=job_id, lane=lane)
+    
+    def remove_jobs_batch(self, *, queue: str, lane: str, job_ids: list[str]):
+        return self._ops.remove_jobs_batch(queue=queue, lane=lane, job_ids=job_ids)
+
     def consume(
         self,
         *,

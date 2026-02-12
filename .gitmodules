@@ -1,3 +1,0 @@
-[submodule "src/omniq/core"]
-	path = src/omniq/core
-	url = git@github.com:not-empty/omniq.git

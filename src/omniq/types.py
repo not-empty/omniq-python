@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, Union, Literal
+from typing import Any, Dict, Optional, Tuple, Union, Literal, List
 
 PayloadT = Union[Dict[str, Any], list, str]
 
@@ -13,6 +13,7 @@ class JobCtx:
     lock_until_ms: int
     lease_token: str
     gid: str = ""
+    check_completion: Any = None
 
 @dataclass(frozen=True)
 class ReservePaused:
@@ -28,6 +29,7 @@ class ReserveJob:
     gid: str
     lease_token: str
 
-ReserveResult = Union[None, ReservePaused, ReserveJob]
-
 AckFailResult = Tuple[Literal["RETRY", "FAILED"], Optional[int]]
+BatchRemoveResult = List[Tuple[str, str, Optional[str]]]
+BatchRetryFailedResult = List[Tuple[str, str, Optional[str]]]
+ReserveResult = Union[None, ReservePaused, ReserveJob]

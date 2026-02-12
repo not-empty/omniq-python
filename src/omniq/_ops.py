@@ -2,15 +2,15 @@ import json
 import redis
 
 from dataclasses import dataclass
-from typing import Optional, Any
+from typing import Optional, Any, List
 from threading import Lock
 
 from .clock import now_ms
 from .ids import new_ulid
-from .types import ReservePaused, ReserveJob, ReserveResult, AckFailResult
+from .types import ReservePaused, ReserveJob, ReserveResult, AckFailResult, BatchRemoveResult, BatchRetryFailedResult
 from .transport import RedisLike
 from .scripts import OmniqScripts
-from .helper import queue_base, queue_anchor
+from .helper import queue_base, queue_anchor, check_completion_anchor
 
 @dataclass
 class OmniqOps:
@@ -300,6 +300,195 @@ class OmniqOps:
         except Exception:
             n = 0
         return n if n > 0 else int(default_ms)
+    
+    def retry_failed(self, *, queue: str, job_id: str, now_ms_override: int = 0) -> None:
+        anchor = queue_anchor(queue)
+        nms = now_ms_override or now_ms()
+
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.retry_failed.sha,
+            self.scripts.retry_failed.src,
+            1,
+            anchor,
+            job_id,
+            str(int(nms)),
+        )
+
+        if not isinstance(res, list) or len(res) < 1:
+            raise RuntimeError(f"Unexpected RETRY_FAILED response: {res}")
+
+        if res[0] == "OK":
+            return
+
+        if res[0] == "ERR":
+            reason = str(res[1]) if len(res) > 1 else "UNKNOWN"
+            raise RuntimeError(f"RETRY_FAILED failed: {reason}")
+
+        raise RuntimeError(f"Unexpected RETRY_FAILED response: {res}")
+
+    def retry_failed_batch(
+        self,
+        *,
+        queue: str,
+        job_ids: List[str],
+        now_ms_override: int = 0,
+    ) -> BatchRetryFailedResult:
+        if len(job_ids) > 100:
+            raise ValueError("retry_failed_batch max is 100 job_ids per call")
+
+        anchor = queue_anchor(queue)
+        nms = now_ms_override or now_ms()
+
+        argv: list[str] = [str(int(nms)), str(len(job_ids))]
+        argv.extend([str(j) for j in job_ids])
+
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.retry_failed_batch.sha,
+            self.scripts.retry_failed_batch.src,
+            1,
+            anchor,
+            *argv,
+        )
+
+        if not isinstance(res, list):
+            raise RuntimeError(f"Unexpected RETRY_FAILED_BATCH response: {res}")
+
+        if len(res) >= 2 and str(res[0]) == "ERR":
+            reason = str(res[1])
+            extra = str(res[2]) if len(res) > 2 else ""
+            raise RuntimeError(f"RETRY_FAILED_BATCH failed: {reason} {extra}".strip())
+
+        out: BatchRetryFailedResult = []
+        i = 0
+        while i < len(res):
+            job_id = str(res[i] or "")
+            status = str(res[i + 1] or "")
+            reason: Optional[str] = None
+            if status == "ERR":
+                reason = str(res[i + 2] or "UNKNOWN")
+                i += 3
+            else:
+                i += 2
+            out.append((job_id, status, reason))
+        return out
+
+    def remove_job(self, *, queue: str, job_id: str, lane: str) -> str:
+        anchor = queue_anchor(queue)
+
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.remove_job.sha,
+            self.scripts.remove_job.src,
+            1,
+            anchor,
+            job_id,
+            lane,
+        )
+
+        if not isinstance(res, list) or len(res) < 1:
+            raise RuntimeError(f"Unexpected REMOVE_JOB response: {res}")
+
+        if res[0] == "OK":
+            return str(res[0] or "")
+
+        if res[0] == "ERR":
+            reason = str(res[1]) if len(res) > 1 else "UNKNOWN"
+            raise RuntimeError(f"REMOVE_JOB failed: {reason}")
+
+        raise RuntimeError(f"Unexpected REMOVE_JOB response: {res}")
+
+    def remove_jobs_batch(
+        self,
+        *,
+        queue: str,
+        lane: str,
+        job_ids: List[str],
+    ) -> BatchRemoveResult:
+        if len(job_ids) > 100:
+            raise ValueError("remove_jobs_batch max is 100 job_ids per call")
+
+        anchor = queue_anchor(queue)
+
+        argv: list[str] = [str(lane), str(len(job_ids))]
+        argv.extend([str(j) for j in job_ids])
+
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.remove_jobs_batch.sha,
+            self.scripts.remove_jobs_batch.src,
+            1,
+            anchor,
+            *argv,
+        )
+
+        if not isinstance(res, list):
+            raise RuntimeError(f"Unexpected REMOVE_JOBS_BATCH response: {res}")
+
+        if len(res) >= 2 and str(res[0]) == "ERR":
+            reason = str(res[1])
+            extra = str(res[2]) if len(res) > 2 else ""
+            raise RuntimeError(f"REMOVE_JOBS_BATCH failed: {reason} {extra}".strip())
+
+        out: BatchRemoveResult = []
+        i = 0
+        while i < len(res):
+            job_id = str(res[i] or "")
+            status = str(res[i + 1] or "")
+            reason: Optional[str] = None
+            if status == "ERR":
+                reason = str(res[i + 2] or "UNKNOWN")
+                i += 3
+            else:
+                i += 2
+            out.append((job_id, status, reason))
+        return out
+    
+    def check_completion_init_job_counter(self, *, key: str, expected: int) -> None:
+        anchor = check_completion_anchor(key)
+
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.check_completion_init.sha,
+            self.scripts.check_completion_init.src,
+            1,
+            anchor,
+            str(int(expected)),
+        )
+
+        if not isinstance(res, list) or len(res) < 1:
+            raise RuntimeError(f"Unexpected CHECK_COMPLETION_INIT response: {res}")
+
+        if res[0] == "OK":
+            return
+
+        if res[0] == "ERR":
+            reason = str(res[1]) if len(res) > 1 else "UNKNOWN"
+            raise RuntimeError(f"CHECK_COMPLETION_INIT failed: {reason}")
+
+        raise RuntimeError(f"Unexpected CHECK_COMPLETION_INIT response: {res}")
+
+    def check_completion_job_decrement(self, *, key: str, child_id: str) -> int:
+        anchor = check_completion_anchor(key)
+
+        res = self._evalsha_with_noscript_fallback(
+            self.scripts.check_completion_decrement.sha,
+            self.scripts.check_completion_decrement.src,
+            1,
+            anchor,
+            str(child_id),
+        )
+
+        if not isinstance(res, list) or len(res) < 2:
+            raise RuntimeError(f"Unexpected CHECK_COMPLETION_DECREMENT response: {res}")
+
+        if res[0] == "OK":
+            try:
+                return int(res[1])
+            except Exception:
+                raise RuntimeError(f"Unexpected CHECK_COMPLETION_DECREMENT remaining: {res}")
+
+        if res[0] == "ERR":
+            reason = str(res[1]) if len(res) > 1 else "UNKNOWN"
+            raise RuntimeError(f"CHECK_COMPLETION_DECREMENT failed: {reason}")
+
+        raise RuntimeError(f"Unexpected CHECK_COMPLETION_DECREMENT response: {res}")
 
     @staticmethod
     def paused_backoff_s(poll_interval_s: float) -> float:
