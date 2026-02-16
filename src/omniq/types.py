@@ -13,7 +13,7 @@ class JobCtx:
     lock_until_ms: int
     lease_token: str
     gid: str = ""
-    check_completion: Any = None
+    exec: Any = None
 
 @dataclass(frozen=True)
 class ReservePaused:

@@ -25,8 +25,8 @@ class OmniqScripts:
     retry_failed_batch: ScriptDef
     remove_job: ScriptDef
     remove_jobs_batch: ScriptDef
-    check_completion_init: ScriptDef
-    check_completion_decrement: ScriptDef
+    childs_init: ScriptDef
+    child_ack: ScriptDef
 
 def default_scripts_dir() -> str:
     here = os.path.dirname(__file__)
@@ -54,6 +54,6 @@ def load_scripts(r: ScriptLoader, scripts_dir: str) -> OmniqScripts:
         retry_failed_batch=load_one("retry_failed_batch.lua"),
         remove_job=load_one("remove_job.lua"),
         remove_jobs_batch=load_one("remove_jobs_batch.lua"),
-        check_completion_init=load_one("check_completion_init.lua"),
-        check_completion_decrement=load_one("check_completion_decrement.lua"),
+        childs_init=load_one("childs_init.lua"),
+        child_ack=load_one("child_ack.lua"),
     )

@@ -10,7 +10,7 @@ from .ids import new_ulid
 from .types import ReservePaused, ReserveJob, ReserveResult, AckFailResult, BatchRemoveResult, BatchRetryFailedResult
 from .transport import RedisLike
 from .scripts import OmniqScripts
-from .helper import queue_base, queue_anchor, check_completion_anchor
+from .helper import queue_base, queue_anchor, childs_anchor
 
 @dataclass
 class OmniqOps:
@@ -441,40 +441,40 @@ class OmniqOps:
             out.append((job_id, status, reason))
         return out
     
-    def check_completion_init_job_counter(self, *, key: str, expected: int) -> None:
-        anchor = check_completion_anchor(key)
+    def childs_init(self, *, key: str, expected: int) -> None:
+        anchor = childs_anchor(key)
 
         res = self._evalsha_with_noscript_fallback(
-            self.scripts.check_completion_init.sha,
-            self.scripts.check_completion_init.src,
+            self.scripts.childs_init.sha,
+            self.scripts.childs_init.src,
             1,
             anchor,
             str(int(expected)),
         )
 
         if not isinstance(res, list) or len(res) < 1:
-            raise RuntimeError(f"Unexpected CHECK_COMPLETION_INIT response: {res}")
+            raise RuntimeError(f"Unexpected CHILDS_INIT response: {res}")
 
         if res[0] == "OK":
             return
 
         if res[0] == "ERR":
             reason = str(res[1]) if len(res) > 1 else "UNKNOWN"
-            raise RuntimeError(f"CHECK_COMPLETION_INIT failed: {reason}")
+            raise RuntimeError(f"CHILDS_INIT failed: {reason}")
 
-        raise RuntimeError(f"Unexpected CHECK_COMPLETION_INIT response: {res}")
+        raise RuntimeError(f"Unexpected CHILDS_INIT response: {res}")
 
-    def check_completion_job_decrement(self, *, key: str, child_id: str) -> int:
-        anchor = check_completion_anchor(key)
+    def child_ack(self, *, key: str, child_id: str) -> int:
+        anchor = childs_anchor(key)
 
         cid = (str(child_id) if child_id is not None else "").strip()
         if not cid:
-            raise ValueError("check_completion child_id is required")
+            raise ValueError("child_ack child_id is required")
 
         try:
             res = self._evalsha_with_noscript_fallback(
-                self.scripts.check_completion_decrement.sha,
-                self.scripts.check_completion_decrement.src,
+                self.scripts.child_ack.sha,
+                self.scripts.child_ack.src,
                 1,
                 anchor,
                 cid,

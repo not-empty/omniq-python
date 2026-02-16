@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, Optional
 
 from ._ops import OmniqOps
 from .types import JobCtx, ReserveJob
-from .check_completion import CheckCompletion
+from .exec import Exec
 
 @dataclass
 class StopController:
@@ -177,7 +177,7 @@ def consume(
             except Exception:
                 payload_obj = res.payload
 
-            cc = CheckCompletion(ops=ops, default_child_id=res.job_id)
+            exec = Exec(ops=ops, default_child_id=res.job_id)
             ctx = JobCtx(
                 queue=queue,
                 job_id=res.job_id,
@@ -187,7 +187,7 @@ def consume(
                 lock_until_ms=res.lock_until_ms,
                 lease_token=res.lease_token,
                 gid=res.gid,
-                check_completion=cc,
+                exec=exec,
             )
 
             if verbose:

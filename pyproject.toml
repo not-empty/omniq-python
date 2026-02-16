@@ -1,6 +1,6 @@
 [project]
 name = "omniq"
-version = "1.4.1"
+version = "1.5.0"
 authors = [
   { name="Not Empty Foundation", email="dev@not-empty.org" },
 ]
