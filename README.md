@@ -371,7 +371,7 @@ def pause_unpause_example(ctx):
 
     # checking if this queue it is paused (spoiler: it's not)
     is_paused = ctx.exec.is_paused(
-        "test"
+        queue="test"
     )
     print("Is paused", is_paused)
     time.sleep(2)
@@ -381,12 +381,12 @@ def pause_unpause_example(ctx):
 
     # pausing this queue (this job it's and others active jobs will be not affected but not new job will be start until queue is resumed)
     ctx.exec.pause(
-        "test"
+        queue="test"
     )
 
     # checking again now is suposed to be paused
     is_paused = ctx.exec.is_paused(
-        "test"
+        queue="test"
     )
     print("Is paused", is_paused)
     time.sleep(2)
@@ -395,12 +395,12 @@ def pause_unpause_example(ctx):
 
     # resuming this queue (all other workers can process jobs again)
     ctx.exec.resume(
-        "test"
+        queue="test"
     )
 
     # checking again and is suposed to be resumed
     is_paused = ctx.exec.is_paused(
-        "test"
+        queue="test"
     )
     print("Is paused", is_paused)
     time.sleep(2)
