@@ -1,8 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass, asdict
 from typing import Callable, Optional, Any
 
 from ._ops import OmniqOps
-from .consumer import consume as consume_loop
 from .scripts import load_scripts, default_scripts_dir
 from .transport import RedisConnOpts, build_redis_client, RedisLike
 from .types import ReserveResult, AckFailResult
@@ -75,6 +74,54 @@ class OmniqClient:
             group_limit=group_limit,
         )
 
+    def publish_json(
+        self,
+        *,
+        queue: str,
+        payload: Any,
+        job_id: Optional[str] = None,
+        max_attempts: int = 3,
+        timeout_ms: int = 60_000,
+        backoff_ms: int = 5_000,
+        due_ms: int = 0,
+        gid: Optional[str] = None,
+        group_limit: int = 0,
+    ) -> str:
+        if isinstance(payload, (dict, list)):
+            structured = payload
+        else:
+            if is_dataclass(payload):
+                structured = asdict(payload)
+
+            elif hasattr(payload, "model_dump"):
+                structured = payload.model_dump()
+
+            elif hasattr(payload, "dict"):
+                structured = payload.dict()
+
+            else:
+                raise TypeError(
+                    "publish_json(payload=...) must be dict/list or a dataclass/pydantic model "
+                    "that converts to structured JSON."
+                )
+
+        if not isinstance(structured, (dict, list)):
+            raise TypeError(
+                "publish_json(payload=...) must convert to dict or list (structured JSON)."
+            )
+
+        return self._ops.publish(
+            queue=queue,
+            payload=structured,
+            job_id=job_id,
+            max_attempts=max_attempts,
+            timeout_ms=timeout_ms,
+            backoff_ms=backoff_ms,
+            due_ms=due_ms,
+            gid=gid,
+            group_limit=group_limit,
+        )
+
     def reserve(self, *, queue: str, now_ms_override: int = 0) -> ReserveResult:
         return self._ops.reserve(queue=queue, now_ms_override=now_ms_override)
 
@@ -84,8 +131,8 @@ class OmniqClient:
     def ack_success(self, *, queue: str, job_id: str, lease_token: str, now_ms_override: int = 0) -> None:
         return self._ops.ack_success(queue=queue, job_id=job_id, lease_token=lease_token, now_ms_override=now_ms_override)
 
-    def ack_fail(self, *, queue: str, job_id: str, lease_token: str, now_ms_override: int = 0) -> AckFailResult:
-        return self._ops.ack_fail(queue=queue, job_id=job_id, lease_token=lease_token, now_ms_override=now_ms_override)
+    def ack_fail(self, *, queue: str, job_id: str, lease_token: str, error: Optional[str] = None, now_ms_override: int = 0) -> AckFailResult:
+        return self._ops.ack_fail(queue=queue, job_id=job_id, lease_token=lease_token, error=error, now_ms_override=now_ms_override)
 
     def promote_delayed(self, *, queue: str, max_promote: int = 1000, now_ms_override: int = 0) -> int:
         return self._ops.promote_delayed(queue=queue, max_promote=max_promote, now_ms_override=now_ms_override)
@@ -114,6 +161,12 @@ class OmniqClient:
     def remove_jobs_batch(self, *, queue: str, lane: str, job_ids: list[str]):
         return self._ops.remove_jobs_batch(queue=queue, lane=lane, job_ids=job_ids)
 
+    def childs_init(self, *, key: str, expected: int) -> None:
+        return self._ops.childs_init(key=key, expected=expected)
+
+    def child_ack(self, *, key: str, child_id: str) -> int:
+        return self._ops.child_ack(key=key, child_id=child_id)
+
     def consume(
         self,
         *,
@@ -129,8 +182,9 @@ class OmniqClient:
         logger: Callable[[str], None] = print,
         drain: bool = True,
     ) -> None:
+        from .consumer import consume as consume_loop
         return consume_loop(
-            self._ops,
+            self,
             queue=queue,
             handler=handler,
             poll_interval_s=poll_interval_s,

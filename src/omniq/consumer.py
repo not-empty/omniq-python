@@ -5,7 +5,7 @@ import signal
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
-from ._ops import OmniqOps
+from .client import OmniqClient
 from .types import JobCtx, ReserveJob
 from .exec import Exec
 
@@ -21,7 +21,7 @@ class HeartbeatHandle:
     thread: threading.Thread
 
 def start_heartbeater(
-    ops: OmniqOps,
+    client: OmniqClient,
     *,
     queue: str,
     job_id: str,
@@ -33,7 +33,7 @@ def start_heartbeater(
 
     def hb_loop():
         try:
-            ops.heartbeat(queue=queue, job_id=job_id, lease_token=lease_token)
+            client.heartbeat(queue=queue, job_id=job_id, lease_token=lease_token)
         except Exception as e:
             msg = str(e)
             if "NOT_ACTIVE" in msg or "TOKEN_MISMATCH" in msg:
@@ -43,7 +43,7 @@ def start_heartbeater(
 
         while not stop_evt.wait(interval_s):
             try:
-                ops.heartbeat(queue=queue, job_id=job_id, lease_token=lease_token)
+                client.heartbeat(queue=queue, job_id=job_id, lease_token=lease_token)
             except Exception as e:
                 msg = str(e)
                 if "NOT_ACTIVE" in msg or "TOKEN_MISMATCH" in msg:
@@ -71,7 +71,7 @@ def _payload_preview(payload: Any, max_len: int = 300) -> str:
     return s
 
 def consume(
-    ops: OmniqOps,
+    client: OmniqClient,
     *,
     queue: str,
     handler: Callable[[JobCtx], None],
@@ -86,6 +86,8 @@ def consume(
     stop_on_ctrl_c: bool = True,
     drain: bool = True,
 ) -> None:
+    ops = client.ops
+
     last_promote = 0.0
     last_reap = 0.0
 
@@ -132,20 +134,20 @@ def consume(
 
             if now_s - last_promote >= promote_interval_s:
                 try:
-                    ops.promote_delayed(queue=queue, max_promote=promote_batch)
+                    client.promote_delayed(queue=queue, max_promote=promote_batch)
                 except Exception:
                     pass
                 last_promote = now_s
 
             if now_s - last_reap >= reap_interval_s:
                 try:
-                    ops.reap_expired(queue=queue, max_reap=reap_batch)
+                    client.reap_expired(queue=queue, max_reap=reap_batch)
                 except Exception:
                     pass
                 last_reap = now_s
 
             try:
-                res = ops.reserve(queue=queue)
+                res = client.reserve(queue=queue)
             except Exception as e:
                 if verbose:
                     _safe_log(logger, f"[consume] reserve error: {e}")
@@ -177,7 +179,7 @@ def consume(
             except Exception:
                 payload_obj = res.payload
 
-            exec = Exec(ops=ops, default_child_id=res.job_id)
+            exec = Exec(client=client, default_child_id=res.job_id)
             ctx = JobCtx(
                 queue=queue,
                 job_id=res.job_id,
@@ -202,7 +204,7 @@ def consume(
                 hb_s = ops.derive_heartbeat_interval_s(timeout_ms)
 
             hb = start_heartbeater(
-                ops,
+                client,
                 queue=queue,
                 job_id=res.job_id,
                 lease_token=res.lease_token,
@@ -216,7 +218,7 @@ def consume(
 
                 if not hb.flags.get("lost", False):
                     try:
-                        ops.ack_success(queue=queue, job_id=res.job_id, lease_token=res.lease_token)
+                        client.ack_success(queue=queue, job_id=res.job_id, lease_token=res.lease_token)
                         if verbose:
                             _safe_log(logger, f"[consume] ack success job_id={ctx.job_id}")
                     except Exception as e:
@@ -235,7 +237,7 @@ def consume(
                 if not hb.flags.get("lost", False):
                     try:
                         err = f"{type(e).__name__}: {e}"
-                        result = ops.ack_fail(
+                        result = client.ack_fail(
                             queue=queue,
                             job_id=res.job_id,
                             lease_token=res.lease_token,
