@@ -7,6 +7,19 @@ from .transport import RedisConnOpts, build_redis_client, RedisLike
 from .types import ReserveResult, AckFailResult
 from .helper import queue_base
 
+def _safe_close_redis(r: Any) -> None:
+    if r is None:
+        return
+    try:
+        r.close()
+        return
+    except Exception:
+        pass
+    try:
+        r.connection_pool.disconnect()
+    except Exception:
+        pass
+
 @dataclass
 class OmniqClient:
     _ops: OmniqOps
@@ -23,7 +36,10 @@ class OmniqClient:
         password: Optional[str] = None,
         ssl: bool = False,
         scripts_dir: Optional[str] = None,
+        client_name: Optional[str] = None,
     ):
+        self._owns_redis = redis is None
+
         if redis is not None:
             r = redis
         else:
@@ -38,12 +54,30 @@ class OmniqClient:
                     ssl=ssl,
                 )
             )
+        
+        if client_name:
+            try:
+                r.client_setname(str(client_name))
+            except Exception:
+                pass
 
         if scripts_dir is None:
             scripts_dir = default_scripts_dir()
         scripts = load_scripts(r, scripts_dir)
 
         self._ops = OmniqOps(r=r, scripts=scripts)
+
+    def close(self) -> None:
+        if not getattr(self, "_owns_redis", False):
+            return
+        r = getattr(self._ops, "r", None)
+        _safe_close_redis(r)
+
+    def __enter__(self) -> "OmniqClient":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
     @staticmethod
     def queue_base(queue_name: str) -> str:

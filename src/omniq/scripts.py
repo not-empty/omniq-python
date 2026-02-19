@@ -1,14 +1,18 @@
 import os
 from dataclasses import dataclass
+from threading import Lock
 from typing import Protocol
+
 
 class ScriptLoader(Protocol):
     def script_load(self, script: str) -> str: ...
+
 
 @dataclass(frozen=True)
 class ScriptDef:
     sha: str
     src: str
+
 
 @dataclass(frozen=True)
 class OmniqScripts:
@@ -28,11 +32,21 @@ class OmniqScripts:
     childs_init: ScriptDef
     child_ack: ScriptDef
 
+
 def default_scripts_dir() -> str:
     here = os.path.dirname(__file__)
     return os.path.join(here, "core", "scripts")
 
+_scripts_cache: dict[str, OmniqScripts] = {}
+_scripts_cache_lock = Lock()
+
+
 def load_scripts(r: ScriptLoader, scripts_dir: str) -> OmniqScripts:
+    with _scripts_cache_lock:
+        cached = _scripts_cache.get(scripts_dir)
+        if cached is not None:
+            return cached
+
     def load_one(name: str) -> ScriptDef:
         path = os.path.join(scripts_dir, name)
         with open(path, "r", encoding="utf-8") as f:
@@ -40,7 +54,7 @@ def load_scripts(r: ScriptLoader, scripts_dir: str) -> OmniqScripts:
         sha = r.script_load(src)
         return ScriptDef(sha=sha, src=src)
 
-    return OmniqScripts(
+    scripts = OmniqScripts(
         enqueue=load_one("enqueue.lua"),
         reserve=load_one("reserve.lua"),
         ack_success=load_one("ack_success.lua"),
@@ -57,3 +71,8 @@ def load_scripts(r: ScriptLoader, scripts_dir: str) -> OmniqScripts:
         childs_init=load_one("childs_init.lua"),
         child_ack=load_one("child_ack.lua"),
     )
+
+    with _scripts_cache_lock:
+        _scripts_cache[scripts_dir] = scripts
+
+    return scripts
