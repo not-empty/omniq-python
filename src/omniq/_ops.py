@@ -2,7 +2,7 @@ import json
 import redis
 
 from dataclasses import dataclass
-from typing import Optional, Any, List
+from typing import Optional, Any, List, ClassVar
 from threading import Lock
 
 from .clock import now_ms
@@ -14,7 +14,7 @@ from .helper import queue_base, queue_anchor, childs_anchor
 
 @dataclass
 class OmniqOps:
-    _script_lock = Lock()
+    _script_lock: ClassVar[Lock] = Lock()
     r: RedisLike
     scripts: OmniqScripts
 
@@ -29,7 +29,11 @@ class OmniqOps:
             return self.r.evalsha(sha, numkeys, *keys_and_args)
         except redis.exceptions.NoScriptError:
             with self._script_lock:
-                return self.r.eval(src, numkeys, *keys_and_args)
+                try:
+                    return self.r.evalsha(sha, numkeys, *keys_and_args)
+                except redis.exceptions.NoScriptError:
+                    new_sha = self.r.script_load(src)
+                    return self.r.evalsha(new_sha, numkeys, *keys_and_args)
 
     def publish(
         self,
@@ -499,7 +503,6 @@ class OmniqOps:
             return -1
         except Exception:
             return -1
-
 
     @staticmethod
     def paused_backoff_s(poll_interval_s: float) -> float:

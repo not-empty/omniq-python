@@ -31,25 +31,37 @@ def start_heartbeater(
     stop_evt = threading.Event()
     flags: Dict[str, bool] = {"lost": False}
 
+    def _lost(msg: str) -> bool:
+        msg_u = (msg or "").upper()
+        return ("NOT_ACTIVE" in msg_u) or ("TOKEN_MISMATCH" in msg_u)
+
     def hb_loop():
         try:
             client.heartbeat(queue=queue, job_id=job_id, lease_token=lease_token)
         except Exception as e:
+            if stop_evt.is_set():
+                return
             msg = str(e)
-            if "NOT_ACTIVE" in msg or "TOKEN_MISMATCH" in msg:
+            if _lost(msg):
                 flags["lost"] = True
                 stop_evt.set()
                 return
+            time.sleep(min(0.2, max(0.01, float(interval_s))))
 
-        while not stop_evt.wait(interval_s):
+        while True:
+            if stop_evt.wait(interval_s):
+                return
             try:
                 client.heartbeat(queue=queue, job_id=job_id, lease_token=lease_token)
             except Exception as e:
+                if stop_evt.is_set():
+                    return
                 msg = str(e)
-                if "NOT_ACTIVE" in msg or "TOKEN_MISMATCH" in msg:
+                if _lost(msg):
                     flags["lost"] = True
                     stop_evt.set()
                     return
+                time.sleep(min(0.2, max(0.01, float(interval_s))))
 
     t = threading.Thread(target=hb_loop, daemon=True)
     t.start()
@@ -93,37 +105,35 @@ def consume(
 
     ctrl = StopController(stop=False, sigint_count=0)
 
-    if stop_on_ctrl_c and threading.current_thread() is threading.main_thread():
-        def on_sigterm(signum, _frame):
-            ctrl.stop = True
-            if verbose:
-                _safe_log(logger, f"[consume] SIGTERM received; stopping... queue={queue}")
-
-        signal.signal(signal.SIGTERM, on_sigterm)
-
-        if drain:
-            prev = signal.getsignal(signal.SIGINT)
-
-            def on_sigint(signum, frame):
-                ctrl.sigint_count += 1
-                if ctrl.sigint_count >= 2:
-                    if verbose:
-                        _safe_log(logger, f"[consume] SIGINT x2; hard exit now. queue={queue}")
-                    try:
-                        signal.signal(signal.SIGINT, prev if prev else signal.SIG_DFL)
-                    except Exception:
-                        signal.signal(signal.SIGINT, signal.SIG_DFL)
-                    raise KeyboardInterrupt
-
-                ctrl.stop = True
-                if verbose:
-                    _safe_log(logger, f"[consume] Ctrl+C received; draining current job then exiting. queue={queue}")
-
-            signal.signal(signal.SIGINT, on_sigint)
-        else:
-            pass
+    prev_sigterm = None
+    prev_sigint = None
 
     try:
+        if stop_on_ctrl_c and threading.current_thread() is threading.main_thread():
+            def on_sigterm(signum, _frame):
+                ctrl.stop = True
+                if verbose:
+                    _safe_log(logger, f"[consume] SIGTERM received; stopping... queue={queue}")
+
+            prev_sigterm = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, on_sigterm)
+
+            if drain:
+                prev_sigint = signal.getsignal(signal.SIGINT)
+
+                def on_sigint(signum, frame):
+                    ctrl.sigint_count += 1
+                    if ctrl.sigint_count >= 2:
+                        if verbose:
+                            _safe_log(logger, f"[consume] SIGINT x2; hard exit now. queue={queue}")
+                        raise KeyboardInterrupt
+
+                    ctrl.stop = True
+                    if verbose:
+                        _safe_log(logger, f"[consume] Ctrl+C received; draining current job then exiting. queue={queue}")
+
+                signal.signal(signal.SIGINT, on_sigint)
+
         while True:
             if ctrl.stop:
                 if verbose:
@@ -214,8 +224,6 @@ def consume(
             try:
                 handler(ctx)
 
-                hb.stop_evt.set()
-
                 if not hb.flags.get("lost", False):
                     try:
                         client.ack_success(queue=queue, job_id=res.job_id, lease_token=res.lease_token)
@@ -228,12 +236,9 @@ def consume(
             except KeyboardInterrupt:
                 if verbose:
                     _safe_log(logger, f"[consume] KeyboardInterrupt; exiting now. queue={queue}")
-                hb.stop_evt.set()
                 return
 
             except Exception as e:
-                hb.stop_evt.set()
-
                 if not hb.flags.get("lost", False):
                     try:
                         err = f"{type(e).__name__}: {e}"
@@ -255,7 +260,12 @@ def consume(
 
             finally:
                 try:
-                    hb.thread.join(timeout=0.1)
+                    hb.stop_evt.set()
+                except Exception:
+                    pass
+                try:
+                    join_timeout = max(0.2, min(2.0, hb_s * 1.5))
+                    hb.thread.join(timeout=join_timeout)
                 except Exception:
                     pass
 
@@ -268,3 +278,21 @@ def consume(
         if verbose:
             _safe_log(logger, f"[consume] KeyboardInterrupt (outer); exiting now. queue={queue}")
         return
+
+    finally:
+        if stop_on_ctrl_c and threading.current_thread() is threading.main_thread():
+            try:
+                if prev_sigterm is not None:
+                    signal.signal(signal.SIGTERM, prev_sigterm)
+            except Exception:
+                pass
+            try:
+                if prev_sigint is not None:
+                    signal.signal(signal.SIGINT, prev_sigint)
+            except Exception:
+                pass
+
+        try:
+            client.close()
+        except Exception:
+            pass

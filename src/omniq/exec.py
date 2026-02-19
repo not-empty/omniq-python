@@ -3,7 +3,6 @@ from typing import Optional, Any
 
 from .client import OmniqClient
 
-
 @dataclass(frozen=True)
 class Exec:
     client: OmniqClient
