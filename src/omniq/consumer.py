@@ -67,13 +67,11 @@ def start_heartbeater(
     t.start()
     return HeartbeatHandle(stop_evt=stop_evt, flags=flags, thread=t)
 
-
 def _safe_log(logger: Callable[[str], None], msg: str) -> None:
     try:
         logger(msg)
     except Exception:
         pass
-
 
 def _payload_preview(payload: Any, max_len: int = 300) -> str:
     try:
@@ -83,7 +81,6 @@ def _payload_preview(payload: Any, max_len: int = 300) -> str:
     if len(s) > max_len:
         return s[:max_len] + "…"
     return s
-
 
 def consume(
     client: OmniqClient,
