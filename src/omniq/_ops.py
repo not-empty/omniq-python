@@ -504,7 +504,6 @@ class OmniqOps:
         except Exception:
             return -1
 
-
     @staticmethod
     def paused_backoff_s(poll_interval_s: float) -> float:
         return max(0.25, float(poll_interval_s) * 10.0)

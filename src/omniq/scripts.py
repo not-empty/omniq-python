@@ -3,16 +3,13 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
 
-
 class ScriptLoader(Protocol):
     def script_load(self, script: str) -> str: ...
-
 
 @dataclass(frozen=True)
 class ScriptDef:
     sha: str
     src: str
-
 
 @dataclass(frozen=True)
 class OmniqScripts:
@@ -32,14 +29,12 @@ class OmniqScripts:
     childs_init: ScriptDef
     child_ack: ScriptDef
 
-
 def default_scripts_dir() -> str:
     here = os.path.dirname(__file__)
     return os.path.join(here, "core", "scripts")
 
 _scripts_cache: dict[str, OmniqScripts] = {}
 _scripts_cache_lock = Lock()
-
 
 def load_scripts(r: ScriptLoader, scripts_dir: str) -> OmniqScripts:
     with _scripts_cache_lock:

@@ -10,7 +10,6 @@ except Exception:
 
 RedisArg = Union[str, bytes, int, float]
 
-
 class RedisLike(Protocol):
     def evalsha(self, sha: str, numkeys: int, *args: RedisArg) -> Any: ...
     def eval(self, script: str, numkeys: int, *args: RedisArg) -> Any: ...
