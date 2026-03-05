@@ -1,497 +1,443 @@
 # OmniQ (Python)
 
-**OmniQ** is a Redis + Lua, language-agnostic job queue.\
-This package is the **Python client** for OmniQ v1.
+OmniQ Python is the **Python client** for **OmniQ**, a Redis + Lua-based task 
+queue designed for distributed processing with strict control over execution, 
+concurrency, and state. The library provides a direct interface for publishing,
+consuming, and managing jobs while maintaining operational safety guarantees and 
+consistency, even in concurrent and distributed environments.
 
 Core project / docs: https://github.com/not-empty/omniq
 
-------------------------------------------------------------------------
-
-## Key Ideas
-
--   **Hybrid lanes**
-    -   Ungrouped jobs by default
-    -   Optional grouped jobs (FIFO per group + per-group concurrency)
--   **Lease-based execution**
-    -   Workers reserve a job with a time-limited lease
--   **Token-gated ACK / heartbeat**
-    -   `reserve()` returns a `lease_token`
-    -   `heartbeat()` and `ack_*()` must include the same token
--   **Pause / resume (flag-only)**
-    -   Pausing prevents *new reserves*
-    -   Running jobs are not interrupted
-    -   Jobs are not moved
--   **Admin-safe operations**
-    -   Strict `retry`, `retry_batch`, `remove`, `remove_batch`
--   **Handler-driven execution layer**
-    -   `ctx.exec` exposes internal OmniQ operations safely inside handlers
 
 ------------------------------------------------------------------------
 
-## Install
+## Why OmniQ
+
+Redis-based queues typically sacrifice predictability under concurrency.
+
+**OmniQ was designed to provide:**
+-   Atomic state transitions (with Lua)
+-   Lease-based execution (no double processing)
+-   Group isolation with FIFO ordering
+-   Deterministic control over pause, retry, and concurrency
+
+Focused on operational safety in distributed environments.
+
+------------------------------------------------------------------------
+
+## Execution
+The development environment can be started in two different ways, depending on your setup and infrastructure preferences:
+
+-   With Docker — recommended for isolation, reproducibility, and consistent Redis configuration.
+
+-   Without Docker — using a locally installed and properly configured Redis instance.
+
+Both approaches allow you to run the examples and validate queue behavior in a local environment.
+
+------------------------------------------------------------------------
+
+## Installation
+
+### Option 1 - Using Docker
+
+**1. Create Project**
 
 ``` bash
+mkdir omniq-sample
+cd omniq-sample
+```
+**2. Create docker-compose.yml**
+
+``` python
+services:
+  omniq-redis:
+    image: redis:7.4-alpine
+    container_name: omniq-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+  omniq-valkey:
+    image: valkey/valkey:9-alpine
+    container_name: omniq-valkey
+    ports:
+      - "6380:6379"
+    command: ["valkey-server", "--appendonly", "yes"]
+    volumes:
+      - valkey_data:/data
+
+  omniq-python:
+    image: python:3.12-slim
+    container_name: omniq-python
+    working_dir: /app
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./:/app
+    depends_on:
+      - omniq-redis
+    command: ["bash", "-lc", "tail -f /dev/null"]
+```
+choose either Redis or Valkey to run this project.
+
+**3. Start environment**
+
+``` bash
+docker compose up -d
+```
+**4. Access Python container**
+
+``` bash
+docker exec -it omniq-python bash
 pip install omniq
 ```
 
-------------------------------------------------------------------------
+**5. Create Simple example**
 
-## Quick Start
+``` bash
+mkdir simple
+cd simple
+```
 
-### Publish
-
+**publish.py**
 ``` python
-# importing the lib
 from omniq.client import OmniqClient
 
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
+omniq = OmniqClient(host="omniq-redis", port=6379)
 
-# publishing the job
 job_id = omniq.publish(
     queue="demo",
     payload={"hello": "world"},
     timeout_ms=30_000
 )
 
-print("OK", job_id)
+print("Published:", job_id)
 ```
 
-------------------------------------------------------------------------
-
-### Publish Structured JSON
-
-``` python
-from dataclasses import dataclass
-from typing import List, Optional
-
-# importing the lib
-from omniq.client import OmniqClient
-
-
-# Nested structure
-@dataclass
-class Customer:
-    id: str
-    email: str
-    vip: bool
-
-
-# Main payload
-@dataclass
-class OrderCreated:
-    order_id: str
-    customer: Customer
-    amount: int
-    currency: str
-    items: List[str]
-    processed: bool
-    retry_count: int
-    tags: Optional[List[str]] = None
-
-
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# creating structured payload
-payload = OrderCreated(
-    order_id="ORD-2026-0001",
-    customer=Customer(
-        id="CUST-99",
-        email="leo@example.com",
-        vip=True,
-    ),
-    amount=1500,
-    currency="USD",
-    items=["keyboard", "mouse"],
-    processed=False,
-    retry_count=0,
-    tags=["priority", "online"],
-)
-
-# publish using publish_json
-job_id = omniq.publish_json(
-    queue="deno",
-    payload=payload,
-    max_attempts=5,
-    timeout_ms=60_000,
-)
-
-print("OK", job_id)
-```
-
-------------------------------------------------------------------------
-
-### Consume
-
+**consumer.py**
 ``` python
 import time
-
-# importing the lib
 from omniq.client import OmniqClient
 
-# creating your handler (ctx will have all the job information and actions)
-def my_actions(ctx):
-    print("Waiting 2 seconds")
+def handler(ctx):
+    print("Processing:", ctx.job_id)
     time.sleep(2)
     print("Done")
 
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
+omniq = OmniqClient(host="omniq-redis", port=6379)
 
-# creating the consumer that will listen and execute the actions in your handler
 omniq.consume(
     queue="demo",
-    handler=my_actions,
-    verbose=True,
-    drain=False,
+    handler=handler,
+    verbose=True
 )
 ```
+**Run:**
+``` bash
+python publish.py
+python consumer.py
+```
 
+
+------------------------------------------------------------------------
+
+### Option 2 - Running Locally Without Docker
+
+**1. Start Redis**
+``` bash
+redis-server
+```
+
+**2. Create Project**
+``` bash
+mkdir omniq-sample
+cd omniq-sample
+pip install omniq
+```
+Then create publish.py and consumer.py as shown above
+
+------------------------------------------------------------------------
+
+## Publishing
+
+### Publish Simple Job
+
+``` python
+from omniq.client import OmniqClient
+
+omniq = OmniqClient(host="omniq-redis", port=6379)
+
+job_id = omniq.publish(
+    queue="demo",
+    payload={"hello": "world"},
+    timeout_ms=30_000
+)
+```
+The publish method enqueues a job with a JSON-serializable payload.
+
+**Key behavior:**
+-   The job receives a unique job_id
+-   timeout_ms defines the lease duration once reserved
+-   The payload is stored atomically
+This is the simplest way to enqueue work for asynchronous processing.
+
+------------------------------------------------------------------------
+
+### Publish Structured Payload
+
+``` python
+from dataclasses import dataclass
+from typing import Optional, List
+from omniq.client import OmniqClient
+
+@dataclass
+class OrderCreated:
+    order_id: str
+    amount: int
+    currency: str
+    tags: Optional[List[str]] = None
+
+omniq = OmniqClient(host="omniq-redis", port=6379)
+
+job_id = omniq.publish_json(
+    queue="orders",
+    payload=OrderCreated(
+        order_id="ORD-1",
+        amount=1000,
+        currency="USD",
+        tags=["priority"]
+    ),
+    max_attempts=5,
+    timeout_ms=60_000
+)
+```
+The publish_json method allows you to send structured objects (such as dataclasses) that are automatically serialized to JSON before being stored in the queue.
+
+**Advantages:**
+-   Safe and standardized serialization
+-   Typed and predictable payload structure
+-   Explicit max_attempts control
+-   Better organization for event-driven systems
+-   Recommended for production environments where payload contracts must remain stable.
+
+------------------------------------------------------------------------
+
+## Consumption
+
+``` python
+omniq.consume(
+    queue="demo",
+    handler=handler,
+    verbose=True,
+    drain=False
+)
+```
+The consume method starts a worker loop that continuously reserves and processes jobs from the specified queue.
+
+**Parameters:**
+-   queue — Target queue name
+-   handler — Function responsible for processing each job
+-   verbose=True — Enables execution logs (reservations, ACKs, retries, errors)
+-   drain=False — Keeps the consumer running, waiting for new jobs
+  
+With drain=False, the worker behaves as a long-running consumer suitable for services and background processors.
+
+------------------------------------------------------------------------
+
+## Drain Mode
+
+``` python
+omniq.consume(
+    queue="demo",
+    handler=handler,
+    drain=True
+)
+```
+**When drain=True, the consumer:**
+-   Processes all currently available jobs
+-   Does not wait for new jobs
+-   Automatically exits once the queue is empty
+  
+**Best suited for:**
+-   Batch processing
+-   Maintenance scripts
+-   Controlled execution pipelines
+
+------------------------------------------------------------------------
+
+## Heartbeat
+
+For long-running jobs:
+``` python
+ctx.exec.heartbeat()
+```
+The heartbeat call renews the lease of the currently running job.
+
+**Behavior**
+-   Uses the same lease_token issued at reservation
+-   Extends lock_until_ms safely
+-   Prevents the job from returning to the queue while still being processed
+-   Essential for long or unpredictable execution times.
+  
 ------------------------------------------------------------------------
 
 ## Handler Context
 
-Inside `handler(ctx)`:
+### Inside handler(ctx):
 
--   `queue`
--   `job_id`
--   `payload_raw`
--   `payload`
--   `attempt`
--   `lock_until_ms`
--   `lease_token`
--   `gid`
--   `exec` → execution layer (`ctx.exec`)
+| Field          | Description                                |
+|----------------|--------------------------------------------|
+| queue          | Queue name                                 |
+| job_id         | Unique identifier                          |
+| payload        | Deserialized payload                       |
+| payload_raw    | Raw JSON                                   |
+| attempt        | Current attempt number                     |
+| lock_until_ms  | Lease expiration timestamp                 |
+| lease_token    | Required token for ACK/heartbeat           |
+| gid            | Group identifier                           |
+| exec           | Secure layer for administrative operations |
 
 ------------------------------------------------------------------------
 
-# Administrative Operations
-
-All admin operations are **Lua-backed and atomic**.
-
-## retry_failed()
+## Grouped Queues
 
 ``` python
-omniq.retry_failed(queue="demo", job_id="01ABC...")
+omniq.publish(
+    queue="payments",
+    payload={"invoice": 1},
+    gid="company:acme",
+    group_limit=1
+)
 ```
+By defining a gid, the job becomes part of a logical group.
 
--   Works only if job state is `failed`
--   Resets attempt counter
--   Respects grouping rules
+**Guarantees:**
+-   FIFO ordering within the same group
+-   Parallel execution across different groups
+-   Round-robin scheduling between active groups
+-   Concurrency control via group_limit
+
+This allows isolation of tenants, customers, or entities without blocking the entire system.
 
 ------------------------------------------------------------------------
 
-## retry_failed_batch()
+## Retry
+
+### Retry Failed Job
+
+``` python
+omniq.retry_failed(
+    queue="demo",
+    job_id="01ABC..."
+)
+```
+Reactivates a job currently in the failed lane.
+
+**Rules:**
+-   Only works if the job is in failed state
+-   Resets the attempt counter
+-   Preserves group and concurrency rules
+
+
+### Batch Retry (up to 100)
 
 ``` python
 results = omniq.retry_failed_batch(
     queue="demo",
-    job_ids=["01A...", "01B...", "01C..."]
+    job_ids=["01A...", "01B..."]
 )
-
-for job_id, status, reason in results:
-    print(job_id, status, reason)
 ```
+Allows retrying multiple failed jobs at once.
 
--   Max 100 jobs per call
--   Atomic batch
--   Per-job result returned
+**Characteristics:**
+-   Atomic operation (Lua-backed)
+-   Up to 100 jobs per call
+-   Individual result per job (status + reason)
 
 ------------------------------------------------------------------------
 
-## remove_job()
+## Removal
 
 ``` python
-omniq.remove_job(
-    queue="demo",
-    job_id="01ABC...",
-    lane="failed",  # wait | delayed | failed | completed | gwait
-)
-```
-
-Rules:
-
--   Cannot remove active jobs
--   Lane must match job state
--   Group safety preserved
-
-------------------------------------------------------------------------
-
-## remove_jobs_batch()
-
-``` python
-results = omniq.remove_jobs_batch(
+omniq.remove_jobs_batch(
     queue="demo",
     lane="failed",
-    job_ids=["01A...", "01B...", "01C..."]
+    job_ids=["01A...", "01B..."]
 )
 ```
+Removes jobs from a specific lane.
 
--   Max 100 per call
--   Strict lane validation
--   Atomic per batch
+**Important rules:**
+-   Active jobs cannot be removed
+-   The provided lane must match the actual job state
+-   Group integrity is preserved
+-   Used for administrative cleanup and manual state control.
 
 ------------------------------------------------------------------------
 
-## pause()
+## Pause and Resume
 
 ``` python
-pause_result = omniq.pause(
-    queue="demo",
-)
-
-resume_result = omniq.resume(
-    queue="demo",
-)
-
-is_paused = omniq.is_paused(
-    queue="demo",
-)
+omniq.pause(queue="demo")
+omniq.resume(queue="demo")
+omniq.is_paused(queue="demo")
 ```
-------------------------------------------------------------------------
+Controls queue execution flow.
 
-# Handler Context
+**Guarantees:**
+- Prevents new reservations while paused
+- Active jobs continue running normally
+- No job is lost or moved unexpectedly
+- Immediate and consistent resume behavior
 
-Inside `handler(ctx)`:
-
--   `queue`
--   `job_id`
--   `payload_raw`
--   `payload`
--   `attempt`
--   `lock_until_ms`
--   `lease_token`
--   `gid`
--   `exec`
+Can be used externally or inside a handler via ctx.exec.
 
 ------------------------------------------------------------------------
 
-# Child Ack Control (Parent / Child Workflows)
-
-A handler-driven primitive for fan-out workflows.
-
-No TTL. Cleanup happens only when counter reaches zero.
-
-## Parent Example
-
-The first queue will receive a document with 5 pages
-``` python
-# importing the lib
-from omniq.client import OmniqClient
-
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# publishing the job
-job_id = omniq.publish(
-    queue="documents",
-    payload={
-        "document_id": "doc-123", # this will be our unique key to initiate childs and tracking then until completion
-        "pages": 5, # each page must be completed before something happen
-    },
-)
-print("OK", job_id)
-```
-
-The first consumer will publish a job for each page passing the unique key for childs tracking
-``` python
-# importing the lib
-from omniq.client import OmniqClient
-
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# publishing the job
-job_id = omniq.publish(
-    queue="documents",
-    payload={
-        "document_id": "doc-123", # this will be our unique key to initiate childs and tracking then until completion
-        "pages": 5, # each page must be completed before something happen
-    },
-)
-print("OK", job_id)
-```
-
-## Child Example
-
-The second consumer will deal with each page and ack each child (alerting when the last page was processed)
+## Parent/Child Flow
 
 ``` python
-import time
+remaining = ctx.exec.child_ack(completion_key)
 
-# importing the lib
-from omniq.client import OmniqClient
-
-# creating your handler (ctx will have all the job information and actions)
-def page_worker(ctx):
-
-    page = ctx.payload["page"]
-    # getting the unique key to track the childs
-    completion_key = ctx.payload["completion_key"]
-
-    print(f"[page_worker] Processing page {page} (job_id={ctx.job_id})")
-    time.sleep(1.5)
-
-    # acking itself as a child the number of remaining jobs are returned so we can say when the last job was executed
-    remaining = ctx.exec.child_ack(completion_key)
-
-    print(f"[page_worker] Page {page} done. Remaining={remaining}")
-    
-
-    # remaining will be 0 ONLY when this is the last job
-    # will return > 0 when are still jobs to process
-    # and -1 if something goes wrong with the counter
-    if remaining == 0:
-        print("[page_worker] Last page finished.")
-
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# creating the consumer that will listen and execute the actions in your handler
-omniq.consume(
-    queue="pages",
-    handler=page_worker,
-    verbose=True,
-    drain=False,
-)
+if remaining == 0:
+    print("Last child completed")
 ```
+**Returns:**
+- Pending children -> `> 0`
+- Last Child -> `0`
+- Counter error -> `1`
 
-Properties:
-
--   Idempotent decrement
--   Safe under retries
--   Cross-queue safe
--   Fully business-logic driven
+**Properties:**
+- Idempotent
+- Retry-safe
+- Isolated across queues
 
 ------------------------------------------------------------------------
-
-## Grouped Jobs
-
-``` python
-# if you provide a gid (group_id) you can limit the parallel execution for jobs in the same group
-omniq.publish(queue="demo", payload={"i": 1}, gid="company:acme", group_limit=1)
-
-# you can also publis ungrouped jobs that will also be executed (fairness by round-robin algorithm)
-omniq.publish(queue="demo", payload={"i": 2})
-```
-
--   FIFO inside group
--   Groups execute in parallel
--   Concurrency limited per group
+## Administrative Operations
+All administrative operations are `executed atomically via Lua`, ensuring 
+consistency even under high concurrency.
 
 ------------------------------------------------------------------------
-
-## Pause and Resume inside the consumer
-
-You publish your job as usual
-``` python
-# importing the lib
-from omniq.client import OmniqClient
-
-# creating OmniQ passing redis information
-uq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# publishing the job
-job_id = uq.publish(
-    queue="test",
-    payload={"hello": "world"},
-    timeout_ms=30_000
-)
-print("OK", job_id)
-```
-
-Inside your consumer you can pause/resume your queue (or another one)
-``` python
-import time
-
-# importing the lib
-from omniq.client import OmniqClient
-
-# creating your handler (ctx will have all the job information and actions)
-def pause_unpause_example(ctx):
-    print("Waiting 2 seconds")
-
-    # checking if this queue it is paused (spoiler: it's not)
-    is_paused = ctx.exec.is_paused(
-        queue="test"
-    )
-    print("Is paused", is_paused)
-    time.sleep(2)
-
-
-    print("Pausing")
-
-    # pausing this queue (this job it's and others active jobs will be not affected but not new job will be start until queue is resumed)
-    ctx.exec.pause(
-        queue="test"
-    )
-
-    # checking again now is suposed to be paused
-    is_paused = ctx.exec.is_paused(
-        queue="test"
-    )
-    print("Is paused", is_paused)
-    time.sleep(2)
-
-    print("Resuming")
-
-    # resuming this queue (all other workers can process jobs again)
-    ctx.exec.resume(
-        queue="test"
-    )
-
-    # checking again and is suposed to be resumed
-    is_paused = ctx.exec.is_paused(
-        queue="test"
-    )
-    print("Is paused", is_paused)
-    time.sleep(2)
-
-    print("Done")
-
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# creating the consumer that will listen and execute the actions in your handler
-omniq.consume(
-    queue="test",
-    handler=pause_unpause_example,
-    verbose=True,
-    drain=False,
-)
-```
 
 ## Examples
 
-All examples can be found in the `./examples` folder.
+For a better understanding of queue behavior and its main features, see
+the examples available in the `./examples` folder.
+
+**You will find scenarios such as:**
+- Basic job publishing and consumption
+- Using the `ctx.exec` layer inside handlers
+- Parent/child workflows with `childs_init` and `child_ack`
+- Coordination between multiple queues (documents -> pages)
+- Execution control using pause and resume inside handlers
+  
+The examples are recommended to understand the full execution flow in
+real-world environments.
 
 ------------------------------------------------------------------------
 
 ## License
-
-See the repository license.
+GPL-3.0
+Refer to the main repository for details
