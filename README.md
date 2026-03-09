@@ -1,497 +1,553 @@
+
 # OmniQ (Python)
 
-**OmniQ** is a Redis + Lua, language-agnostic job queue.\
-This package is the **Python client** for OmniQ v1.
+OmniQ is a **distributed job queue built on top of Redis + Lua**, 
+designed to run background tasks with **predictable execution,** 
+**concurrency control, and distributed workflows**.
 
-Core project / docs: https://github.com/not-empty/omniq
+This package is the **official Python client for OmniQ v1**.
 
-------------------------------------------------------------------------
-
-## Key Ideas
-
--   **Hybrid lanes**
-    -   Ungrouped jobs by default
-    -   Optional grouped jobs (FIFO per group + per-group concurrency)
--   **Lease-based execution**
-    -   Workers reserve a job with a time-limited lease
--   **Token-gated ACK / heartbeat**
-    -   `reserve()` returns a `lease_token`
-    -   `heartbeat()` and `ack_*()` must include the same token
--   **Pause / resume (flag-only)**
-    -   Pausing prevents *new reserves*
-    -   Running jobs are not interrupted
-    -   Jobs are not moved
--   **Admin-safe operations**
-    -   Strict `retry`, `retry_batch`, `remove`, `remove_batch`
--   **Handler-driven execution layer**
-    -   `ctx.exec` exposes internal OmniQ operations safely inside handlers
+Core project:
+[https://github.com/not-empty/omniq](https://github.com/not-empty/omniq)
 
 ------------------------------------------------------------------------
 
-## Install
+## The Story Behind OmniQ
 
-``` bash
-pip install omniq
+Almost every modern system needs to execute tasks outside the main request flow.
+
+Common examples include:
+
+- sending emails
+- generating reports or documents
+- processing images or videos
+- running data pipelines
+
+At first, solving this problem seems simple.
+You create a queue, add a few workers, and start processing jobs in the background.
+
+But as the system grows, new challenges start to appear. Problems like 
+**duplicate jobs, workers crashing mid-execution,or uncontrolled concurrency** 
+become harder to manage with a simple queue.
+
+Many existing solutions focus mainly on **moving messages**, but not on managing 
+the **full lifecycle of a job execution**.
+
+OmniQ was created to solve this problem by providing a more reliable model for 
+running distributed background jobs, with explicit control over execution, 
+concurrency, and task coordination.
+
+------------------------------------------------------------------------
+
+## How OmniQ Works
+
+The core flow of OmniQ is simple.
+
+An application publishes jobs, and workers process them.
+
+```
+Application
+     │
+     ▼
+  OmniQ Queue
+     │
+     ▼
+   Workers
+     │
+     ▼
+ Processing
+```
+
+Or visually:
+
+```mermaid
+flowchart LR
+
+A[Application] --> B[OmniQ Queue]
+B --> C[Worker 1]
+B --> D[Worker 2]
+B --> E[Worker 3]
+
+C --> F[Processing]
+D --> F
+E --> F
+```
+
+This allows multiple machines to work **in parallel** processing tasks.
+
+------------------------------------------------------------------------
+
+## System Architecture
+
+OmniQ uses **Redis as its storage and coordination engine**.
+
+The critical queue logic runs through **atomic Lua scripts**, ensuring consistent behavior even when multiple workers operate concurrently.
+
+```
+Application
+     │
+     ▼
+   OmniQ Client
+     │
+     ▼
+     Redis
+     │
+     ▼
+   Workers
+```
+
+Or visually:
+
+```mermaid
+flowchart TB
+
+App[Application]
+
+Client[OmniQ Python Client]
+
+Redis[(Redis / Valkey)]
+
+Worker1[Worker]
+Worker2[Worker]
+Worker3[Worker]
+
+App --> Client
+Client --> Redis
+
+Worker1 --> Redis
+Worker2 --> Redis
+Worker3 --> Redis
+```
+
+This architecture enables:
+
+- distributed execution
+- strong consistency under concurrency
+- atomic operations
+- automatic failure recovery
+
+------------------------------------------------------------------------
+
+## Core Concepts
+
+Before using OmniQ, it helps to understand a few fundamental concepts.
+
+------------------------------------------------------------------------
+
+## Job
+
+A **job** represents a unit of work that needs to be executed.
+
+Examples of jobs:
+
+- sending an email
+- generating a report
+- converting a video
+- processing an image
+- analyzing a file
+
+Each job contains basic metadata:
+
+```
+Job
+ ├─ id
+ ├─ queue
+ ├─ payload
+ ├─ attempts
+ └─ state
+```
+
+This allows the system to track the entire lifecycle of a task.
+
+------------------------------------------------------------------------
+
+## Payload
+
+The **payload** contains the data required to execute the job.
+
+It represents the **context of the task**.
+
+Example:
+
+Job: send email
+
+```
+payload
+ ├─ to
+ ├─ subject
+ └─ template
+```
+
+Another example:
+
+Job: generate report
+
+```
+payload
+ ├─ company_id
+ ├─ start_date
+ └─ end_date
+```
+
+Visual representation:
+
+```
+Job
+ ├─ type: generate_report
+ └─ payload
+     ├─ company_id
+     ├─ start_date
+     └─ end_date
+```
+
+Workers use the payload data to perform the work.
+
+------------------------------------------------------------------------
+
+## Publishing a Job
+
+Publishing a job means **sending a task to the queue**.
+
+When a job is published:
+
+1. it receives a unique ID
+2. it is stored in the queue
+3. a worker can reserve and execute it
+
+Flow:
+
+```mermaid
+sequenceDiagram
+
+Application->>OmniQ: publish job
+OmniQ->>Queue: store job
+Worker->>Queue: reserve job
+Worker->>Worker: process
+Worker->>Queue: ack completed
+```
+
+Simplified view:
+
+```
+Application
+     │
+     ▼
+ publish job
+     │
+     ▼
+   Queue
+     │
+     ▼
+   Worker
 ```
 
 ------------------------------------------------------------------------
 
-## Quick Start
+## Queues
 
-### Publish
+Jobs are organized into **queues**.
 
-``` python
-# importing the lib
-from omniq.client import OmniqClient
+Each queue usually represents a type of workload.
 
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
+Example queues:
 
-# publishing the job
-job_id = omniq.publish(
-    queue="demo",
-    payload={"hello": "world"},
-    timeout_ms=30_000
-)
-
-print("OK", job_id)
 ```
+emails
+documents
+images
+payments
+reports
+```
+
+Visualization:
+
+```
+Queue: emails
+
+ ├─ job1
+ ├─ job2
+ └─ job3
+```
+
+Workers may consume jobs from **one or multiple queues**.
 
 ------------------------------------------------------------------------
 
-### Publish Structured JSON
+## Lease-Based Execution
 
-``` python
-from dataclasses import dataclass
-from typing import List, Optional
+OmniQ uses a **lease-based execution model**.
 
-# importing the lib
-from omniq.client import OmniqClient
+When a worker reserves a job, it receives a **temporary lease**.
 
-
-# Nested structure
-@dataclass
-class Customer:
-    id: str
-    email: str
-    vip: bool
-
-
-# Main payload
-@dataclass
-class OrderCreated:
-    order_id: str
-    customer: Customer
-    amount: int
-    currency: str
-    items: List[str]
-    processed: bool
-    retry_count: int
-    tags: Optional[List[str]] = None
-
-
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# creating structured payload
-payload = OrderCreated(
-    order_id="ORD-2026-0001",
-    customer=Customer(
-        id="CUST-99",
-        email="leo@example.com",
-        vip=True,
-    ),
-    amount=1500,
-    currency="USD",
-    items=["keyboard", "mouse"],
-    processed=False,
-    retry_count=0,
-    tags=["priority", "online"],
-)
-
-# publish using publish_json
-job_id = omniq.publish_json(
-    queue="deno",
-    payload=payload,
-    max_attempts=5,
-    timeout_ms=60_000,
-)
-
-print("OK", job_id)
 ```
+Worker reserves job
+        │
+        ▼
+Job becomes locked to that worker
+        │
+        ▼
+Worker processes it
+```
+
+Diagram:
+
+```mermaid
+sequenceDiagram
+
+Worker->>Queue: reserve job
+Queue->>Worker: job + lease_token
+Worker->>Queue: heartbeat
+Worker->>Queue: ack success
+```
+
+If the worker crashes:
+
+- the lease expires
+- the job becomes available again
+
+This prevents jobs from becoming **permanently stuck**.
 
 ------------------------------------------------------------------------
 
-### Consume
+## Heartbeats
 
-``` python
-import time
+Some jobs may take a long time to finish.
 
-# importing the lib
-from omniq.client import OmniqClient
+Examples include:
 
-# creating your handler (ctx will have all the job information and actions)
-def my_actions(ctx):
-    print("Waiting 2 seconds")
-    time.sleep(2)
-    print("Done")
+- video processing
+- large data analysis
+- heavy report generation
 
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
+Workers can send **heartbeats** to extend the lease.
 
-# creating the consumer that will listen and execute the actions in your handler
-omniq.consume(
-    queue="demo",
-    handler=my_actions,
-    verbose=True,
-    drain=False,
-)
+```
+Worker
+ ├─ start job
+ ├─ heartbeat
+ ├─ heartbeat
+ └─ finish job
 ```
 
-------------------------------------------------------------------------
-
-## Handler Context
-
-Inside `handler(ctx)`:
-
--   `queue`
--   `job_id`
--   `payload_raw`
--   `payload`
--   `attempt`
--   `lock_until_ms`
--   `lease_token`
--   `gid`
--   `exec` → execution layer (`ctx.exec`)
-
-------------------------------------------------------------------------
-
-# Administrative Operations
-
-All admin operations are **Lua-backed and atomic**.
-
-## retry_failed()
-
-``` python
-omniq.retry_failed(queue="demo", job_id="01ABC...")
-```
-
--   Works only if job state is `failed`
--   Resets attempt counter
--   Respects grouping rules
-
-------------------------------------------------------------------------
-
-## retry_failed_batch()
-
-``` python
-results = omniq.retry_failed_batch(
-    queue="demo",
-    job_ids=["01A...", "01B...", "01C..."]
-)
-
-for job_id, status, reason in results:
-    print(job_id, status, reason)
-```
-
--   Max 100 jobs per call
--   Atomic batch
--   Per-job result returned
-
-------------------------------------------------------------------------
-
-## remove_job()
-
-``` python
-omniq.remove_job(
-    queue="demo",
-    job_id="01ABC...",
-    lane="failed",  # wait | delayed | failed | completed | gwait
-)
-```
-
-Rules:
-
--   Cannot remove active jobs
--   Lane must match job state
--   Group safety preserved
-
-------------------------------------------------------------------------
-
-## remove_jobs_batch()
-
-``` python
-results = omniq.remove_jobs_batch(
-    queue="demo",
-    lane="failed",
-    job_ids=["01A...", "01B...", "01C..."]
-)
-```
-
--   Max 100 per call
--   Strict lane validation
--   Atomic per batch
-
-------------------------------------------------------------------------
-
-## pause()
-
-``` python
-pause_result = omniq.pause(
-    queue="demo",
-)
-
-resume_result = omniq.resume(
-    queue="demo",
-)
-
-is_paused = omniq.is_paused(
-    queue="demo",
-)
-```
-------------------------------------------------------------------------
-
-# Handler Context
-
-Inside `handler(ctx)`:
-
--   `queue`
--   `job_id`
--   `payload_raw`
--   `payload`
--   `attempt`
--   `lock_until_ms`
--   `lease_token`
--   `gid`
--   `exec`
-
-------------------------------------------------------------------------
-
-# Child Ack Control (Parent / Child Workflows)
-
-A handler-driven primitive for fan-out workflows.
-
-No TTL. Cleanup happens only when counter reaches zero.
-
-## Parent Example
-
-The first queue will receive a document with 5 pages
-``` python
-# importing the lib
-from omniq.client import OmniqClient
-
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# publishing the job
-job_id = omniq.publish(
-    queue="documents",
-    payload={
-        "document_id": "doc-123", # this will be our unique key to initiate childs and tracking then until completion
-        "pages": 5, # each page must be completed before something happen
-    },
-)
-print("OK", job_id)
-```
-
-The first consumer will publish a job for each page passing the unique key for childs tracking
-``` python
-# importing the lib
-from omniq.client import OmniqClient
-
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# publishing the job
-job_id = omniq.publish(
-    queue="documents",
-    payload={
-        "document_id": "doc-123", # this will be our unique key to initiate childs and tracking then until completion
-        "pages": 5, # each page must be completed before something happen
-    },
-)
-print("OK", job_id)
-```
-
-## Child Example
-
-The second consumer will deal with each page and ack each child (alerting when the last page was processed)
-
-``` python
-import time
-
-# importing the lib
-from omniq.client import OmniqClient
-
-# creating your handler (ctx will have all the job information and actions)
-def page_worker(ctx):
-
-    page = ctx.payload["page"]
-    # getting the unique key to track the childs
-    completion_key = ctx.payload["completion_key"]
-
-    print(f"[page_worker] Processing page {page} (job_id={ctx.job_id})")
-    time.sleep(1.5)
-
-    # acking itself as a child the number of remaining jobs are returned so we can say when the last job was executed
-    remaining = ctx.exec.child_ack(completion_key)
-
-    print(f"[page_worker] Page {page} done. Remaining={remaining}")
-    
-
-    # remaining will be 0 ONLY when this is the last job
-    # will return > 0 when are still jobs to process
-    # and -1 if something goes wrong with the counter
-    if remaining == 0:
-        print("[page_worker] Last page finished.")
-
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# creating the consumer that will listen and execute the actions in your handler
-omniq.consume(
-    queue="pages",
-    handler=page_worker,
-    verbose=True,
-    drain=False,
-)
-```
-
-Properties:
-
--   Idempotent decrement
--   Safe under retries
--   Cross-queue safe
--   Fully business-logic driven
+This tells the system that the job **is still actively running**.
 
 ------------------------------------------------------------------------
 
 ## Grouped Jobs
 
-``` python
-# if you provide a gid (group_id) you can limit the parallel execution for jobs in the same group
-omniq.publish(queue="demo", payload={"i": 1}, gid="company:acme", group_limit=1)
+OmniQ supports grouping jobs using **groups**.
 
-# you can also publis ungrouped jobs that will also be executed (fairness by round-robin algorithm)
-omniq.publish(queue="demo", payload={"i": 2})
+This is useful when you need to limit concurrency within a logical group.
+
+Example: processing jobs per customer.
+
+```
+Queue: payments
+
+Group A (customer A)
+ ├─ job1
+ └─ job2
+
+Group B (customer B)
+ ├─ job3
+ └─ job4
 ```
 
--   FIFO inside group
--   Groups execute in parallel
--   Concurrency limited per group
+Guarantees:
+
+- **FIFO ordering within a group**
+- groups run **in parallel**
+- configurable concurrency limits per group
+
+Diagram:
+
+```mermaid
+flowchart TD
+
+A[Queue]
+
+A --> B[Group A]
+A --> C[Group B]
+
+B --> B1[job]
+B --> B2[job]
+
+C --> C1[job]
+C --> C2[job]
+```
 
 ------------------------------------------------------------------------
 
-## Pause and Resume inside the consumer
+## Ungrouped Jobs
 
-You publish your job as usual
-``` python
-# importing the lib
-from omniq.client import OmniqClient
+Jobs can also be published **without a group**.
 
-# creating OmniQ passing redis information
-uq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
+```
+Queue
 
-# publishing the job
-job_id = uq.publish(
-    queue="test",
-    payload={"hello": "world"},
-    timeout_ms=30_000
-)
-print("OK", job_id)
+ ├─ job A
+ ├─ job B
+ └─ job C
 ```
 
-Inside your consumer you can pause/resume your queue (or another one)
-``` python
-import time
+OmniQ uses a **round-robin strategy** to maintain fairness between grouped and ungrouped jobs.
 
-# importing the lib
-from omniq.client import OmniqClient
+------------------------------------------------------------------------
 
-# creating your handler (ctx will have all the job information and actions)
-def pause_unpause_example(ctx):
-    print("Waiting 2 seconds")
+## Workflows with Child Jobs
 
-    # checking if this queue it is paused (spoiler: it's not)
-    is_paused = ctx.exec.is_paused(
-        queue="test"
-    )
-    print("Is paused", is_paused)
-    time.sleep(2)
+Some tasks need to be split into smaller pieces.
 
+For example: processing a multi-page document.
 
-    print("Pausing")
-
-    # pausing this queue (this job it's and others active jobs will be not affected but not new job will be start until queue is resumed)
-    ctx.exec.pause(
-        queue="test"
-    )
-
-    # checking again now is suposed to be paused
-    is_paused = ctx.exec.is_paused(
-        queue="test"
-    )
-    print("Is paused", is_paused)
-    time.sleep(2)
-
-    print("Resuming")
-
-    # resuming this queue (all other workers can process jobs again)
-    ctx.exec.resume(
-        queue="test"
-    )
-
-    # checking again and is suposed to be resumed
-    is_paused = ctx.exec.is_paused(
-        queue="test"
-    )
-    print("Is paused", is_paused)
-    time.sleep(2)
-
-    print("Done")
-
-# creating OmniQ passing redis information
-omniq = OmniqClient(
-    host="omniq-redis",
-    port=6379,
-)
-
-# creating the consumer that will listen and execute the actions in your handler
-omniq.consume(
-    queue="test",
-    handler=pause_unpause_example,
-    verbose=True,
-    drain=False,
-)
 ```
+Document Job
+   │
+   ▼
+Split into pages
+```
+
+Diagram:
+
+```mermaid
+flowchart TD
+
+A[Document Job]
+
+A --> B[Page 1]
+A --> C[Page 2]
+A --> D[Page 3]
+A --> E[Page 4]
+
+B --> F[Completion]
+C --> F
+D --> F
+E --> F
+```
+
+Each page can be processed by **a different worker**, enabling massive parallel processing.
+
+------------------------------------------------------------------------
+
+## Child Job Coordination
+
+OmniQ provides a simple mechanism to coordinate these child jobs.
+
+Each child reports when it finishes:
+
+```
+Page 1 → done
+Page 2 → done
+Page 3 → done
+Page 4 → done
+```
+
+Internally, a **remaining jobs counter** is tracked.
+
+Example:
+
+```
+Remaining = 4
+
+Child 1 finished → Remaining = 3  
+Child 2 finished → Remaining = 2  
+Child 3 finished → Remaining = 1  
+Child 4 finished → Remaining = 0
+```
+
+When the counter reaches **zero**, the workflow can continue.
+
+Key properties:
+
+- idempotent
+- safe for retries
+- works across different queues
+- does not depend on TTL
+
+------------------------------------------------------------------------
+
+## Job States
+
+During its lifecycle, a job transitions through several states.
+
+```mermaid
+stateDiagram-v2
+
+[*] --> waiting
+waiting --> reserved
+reserved --> processing
+processing --> completed
+processing --> failed
+```
+
+This makes the system state **observable and traceable**.
+
+------------------------------------------------------------------------
+
+## Administrative Operations
+
+OmniQ provides safe administrative operations for queue management.
+
+Examples:
+
+- retry failed jobs
+- remove jobs
+- pause queues
+- resume queues
+
+These operations run through **atomic Lua scripts**, ensuring consistency even under high concurrency.
+
+------------------------------------------------------------------------
+
+## When to Use OmniQ
+
+OmniQ is a good fit for systems that need to:
+
+- run background tasks reliably
+- control concurrency
+- coordinate distributed pipelines
+- split large workloads into smaller jobs
+- prevent duplicate execution
+- maintain operational reliability
+
+Common use cases include:
+
+- document processing
+- data pipelines
+- media processing
+- report generation
+- backend automation
+
+------------------------------------------------------------------------
+
+## Installation
+
+```
+pip install omniq
+```
+
+------------------------------------------------------------------------
 
 ## Examples
 
-All examples can be found in the `./examples` folder.
+Complete examples are available in:
+
+```
+./examples
+```
+
+They include:
+
+- publishing jobs
+- basic workers
+- structured payloads
+- parent/child workflows
+- queue coordination
 
 ------------------------------------------------------------------------
 
 ## License
 
-See the repository license.
+See the license file in the repository.
+
+------------------------------------------------------------------------
