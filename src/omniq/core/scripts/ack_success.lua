@@ -20,6 +20,8 @@ local k_job       = base .. ":job:" .. job_id
 local k_active    = base .. ":active"
 local k_completed = base .. ":completed"
 local k_gready    = base .. ":groups:ready"
+local k_stats  = base .. ":stats"
+local k_queues = "omniq:queues"
 
 local function to_i(v)
   if v == false or v == nil or v == '' then return 0 end
@@ -32,6 +34,15 @@ local function dec_floor0(key)
   local v = to_i(redis.call("DECR", key))
   if v < 0 then
     redis.call("SET", key, "0")
+    return 0
+  end
+  return v
+end
+
+local function hincrby_floor0(key, field, delta)
+  local v = to_i(redis.call("HINCRBY", key, field, delta))
+  if v < 0 then
+    redis.call("HSET", key, field, "0")
     return 0
   end
   return v
@@ -57,11 +68,19 @@ if redis.call("ZREM", k_active, job_id) ~= 1 then
   return {"ERR", "NOT_ACTIVE"}
 end
 
+redis.call("SADD", k_queues, base)
+
 redis.call("HSET", k_job,
   "state", "completed",
   "updated_ms", tostring(now_ms),
   "lease_token", "",
   "lock_until_ms", ""
+)
+
+hincrby_floor0(k_stats, "active", -1)
+redis.call("HSET", k_stats,
+  "last_activity_ms", tostring(now_ms),
+  "last_finish_ms", tostring(now_ms)
 )
 
 local gid = redis.call("HGET", k_job, "gid")
@@ -70,8 +89,12 @@ if gid and gid ~= "" then
   local inflight = dec_floor0(k_ginflight)
   local limit = group_limit_for(gid)
   local k_gwait = base .. ":g:" .. gid .. ":wait"
+
   if inflight < limit and to_i(redis.call("LLEN", k_gwait)) > 0 then
-    redis.call("ZADD", k_gready, now_ms, gid)
+    local added = redis.call("ZADD", k_gready, "NX", now_ms, gid)
+    if added == 1 then
+      redis.call("HINCRBY", k_stats, "groups_ready", 1)
+    end
   end
 end
 
@@ -82,5 +105,7 @@ while redis.call("LLEN", k_completed) > KEEP_COMPLETED do
     redis.call("DEL", base .. ":job:" .. old_id)
   end
 end
+
+redis.call("HSET", k_stats, "completed_kept", tostring(to_i(redis.call("LLEN", k_completed))))
 
 return {"OK"}

@@ -26,8 +26,11 @@ local k_job        = base .. ":job:" .. job_id
 local k_delayed    = base .. ":delayed"
 local k_wait       = base .. ":wait"
 local k_has_groups = base .. ":has_groups"
-
+local k_stats      = base .. ":stats"
+local k_queues     = "omniq:queues"
 local is_grouped = (gid ~= nil and gid ~= "")
+
+redis.call("SADD", k_queues, base)
 
 if is_grouped then
   redis.call("HSET", k_job,
@@ -68,10 +71,21 @@ end
 if due_ms ~= nil and due_ms > now_ms then
   redis.call("ZADD", k_delayed, due_ms, job_id)
   redis.call("HSET", k_job, "state", "delayed", "due_ms", tostring(due_ms))
+  redis.call("HINCRBY", k_stats, "delayed", 1)
+  redis.call("HSET", k_stats,
+    "last_activity_ms", tostring(now_ms),
+    "last_enqueue_ms", tostring(now_ms)
+  )
 else
   if is_grouped then
     local k_gwait = base .. ":g:" .. gid .. ":wait"
     redis.call("RPUSH", k_gwait, job_id)
+    redis.call("HINCRBY", k_stats, "group_waiting", 1)
+    redis.call("HINCRBY", k_stats, "waiting_total", 1)
+    redis.call("HSET", k_stats,
+      "last_activity_ms", tostring(now_ms),
+      "last_enqueue_ms", tostring(now_ms)
+    )
 
     local k_ginflight = base .. ":g:" .. gid .. ":inflight"
     local inflight = tonumber(redis.call("GET", k_ginflight) or "0")
@@ -79,10 +93,19 @@ else
     local limit = tonumber(redis.call("GET", base .. ":g:" .. gid .. ":limit") or tostring(DEFAULT_GROUP_LIMIT))
     if inflight < limit then
       local k_gready = base .. ":groups:ready"
-      redis.call("ZADD", k_gready, now_ms, gid)
+      local added = redis.call("ZADD", k_gready, "NX", now_ms, gid)
+      if added == 1 then
+        redis.call("HINCRBY", k_stats, "groups_ready", 1)
+      end
     end
   else
     redis.call("RPUSH", k_wait, job_id)
+    redis.call("HINCRBY", k_stats, "waiting", 1)
+    redis.call("HINCRBY", k_stats, "waiting_total", 1)
+    redis.call("HSET", k_stats,
+      "last_activity_ms", tostring(now_ms),
+      "last_enqueue_ms", tostring(now_ms)
+    )
   end
 end
 
