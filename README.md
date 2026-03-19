@@ -1,38 +1,52 @@
 # OmniQ (Python)
 
-**OmniQ** is a Redis + Lua, language-agnostic job queue.\
-This package is the **Python client** for OmniQ v1.
+Python client for **OmniQ**, a Redis-based distributed job queue designed 
+for deterministic **consumer-driven job execution and coordination**.
 
-Core project / docs: https://github.com/not-empty/omniq
+OmniQ provides primitives for **job reservation, execution, and coordination**
+**directly inside Redis**, allowing multiple **consumers** to safely process 
+jobs in a distributed system.
 
-------------------------------------------------------------------------
+Unlike traditional queues that treat jobs as transient messages, OmniQ 
+maintains **explicit execution and state structures**, enabling predictable 
+control over concurrency, ordering, and failure recovery.
 
-## Key Ideas
+The system is **language-agnostic**, allowing producers and consumers 
+implemented in different runtimes to share the same execution model.
 
--   **Hybrid lanes**
-    -   Ungrouped jobs by default
-    -   Optional grouped jobs (FIFO per group + per-group concurrency)
--   **Lease-based execution**
-    -   Workers reserve a job with a time-limited lease
--   **Token-gated ACK / heartbeat**
-    -   `reserve()` returns a `lease_token`
-    -   `heartbeat()` and `ack_*()` must include the same token
--   **Pause / resume (flag-only)**
-    -   Pausing prevents *new reserves*
-    -   Running jobs are not interrupted
-    -   Jobs are not moved
--   **Admin-safe operations**
-    -   Strict `retry`, `retry_batch`, `remove`, `remove_batch`
--   **Handler-driven execution layer**
-    -   `ctx.exec` exposes internal OmniQ operations safely inside handlers
+Core project:
+
+[https://github.com/not-empty/omniq](https://github.com/not-empty/omniq)
 
 ------------------------------------------------------------------------
 
-## Install
+## Installation
 
-``` bash
+```bash
 pip install omniq
 ```
+
+------------------------------------------------------------------------
+
+## Features
+
+- **Redis-native execution model -**
+  - Job reservation, execution, and coordination happen atomically inside Redis
+- **Consumer- driven processing -**
+  - Workers control execution lifecycle instead of passive message delivery
+- **Deterministic job state -**
+  -  Explicit lanes for `wait`, `delayed`, `active`, `failed`, and `completed`
+-  **Grouped jobs with concurrency limits -**
+   -  FIFO within groups with parallel execution across groups
+- **Atomic administrative operations -**
+  - Retry, removal, pause, and batch operations backed by Lua Scripts
+- **Parent/Child workflow primitive -**
+  - Fan-out processing with idempotent completion tracking
+- **Structured payload support -**
+  - Publish typed dataclasses as JSON
+- **Language-agnostic architecture -**
+  - Producers and consumers can run in different runtimes.    
+
 
 ------------------------------------------------------------------------
 
@@ -40,7 +54,7 @@ pip install omniq
 
 ### Publish
 
-``` python
+```python
 # importing the lib
 from omniq.client import OmniqClient
 
@@ -64,7 +78,7 @@ print("OK", job_id)
 
 ### Publish Structured JSON
 
-``` python
+```python
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -125,12 +139,11 @@ job_id = omniq.publish_json(
 
 print("OK", job_id)
 ```
-
 ------------------------------------------------------------------------
 
 ### Consume
 
-``` python
+```python
 import time
 
 # importing the lib
@@ -162,38 +175,36 @@ omniq.consume(
 ## Handler Context
 
 Inside `handler(ctx)`:
-
--   `queue`
--   `job_id`
--   `payload_raw`
--   `payload`
--   `attempt`
--   `lock_until_ms`
--   `lease_token`
--   `gid`
--   `exec` → execution layer (`ctx.exec`)
+- `queue`
+- `job_id`
+- `payload_raw`
+- `payload`
+- `attempt`
+- `lock_until_ms`
+- `lease_token`
+- `gid`
+- `exec` - execution layer (`ctx.exex`)
 
 ------------------------------------------------------------------------
 
-# Administrative Operations
+## Admistrative OPerations
 
-All admin operations are **Lua-backed and atomic**.
+All admin operations are **Lua-backend and atomic**
 
-## retry_failed()
+### Retry_failed()
 
-``` python
+```bash
 omniq.retry_failed(queue="demo", job_id="01ABC...")
 ```
-
--   Works only if job state is `failed`
--   Resets attempt counter
--   Respects grouping rules
+- Works only if job state is `failed`
+- Resets attempt counter
+- Respects grouping rule
 
 ------------------------------------------------------------------------
 
-## retry_failed_batch()
+### Retry_failed_batch()
 
-``` python
+```bash
 results = omniq.retry_failed_batch(
     queue="demo",
     job_ids=["01A...", "01B...", "01C..."]
@@ -202,50 +213,47 @@ results = omniq.retry_failed_batch(
 for job_id, status, reason in results:
     print(job_id, status, reason)
 ```
-
--   Max 100 jobs per call
--   Atomic batch
--   Per-job result returned
+- Max 100 jobs per call
+- Atomic batch
+- Per-job result returned
 
 ------------------------------------------------------------------------
 
-## remove_job()
+### Remove_job()
 
-``` python
+```bash
 omniq.remove_job(
     queue="demo",
     job_id="01ABC...",
     lane="failed",  # wait | delayed | failed | completed | gwait
 )
 ```
-
-Rules:
-
--   Cannot remove active jobs
--   Lane must match job state
--   Group safety preserved
+**Rules:**
+- Cannot remove active jobs
+- Lane must match job state
+- Group safety preserved
 
 ------------------------------------------------------------------------
 
-## remove_jobs_batch()
+### Remove_job_batch()
 
-``` python
+```bash
 results = omniq.remove_jobs_batch(
     queue="demo",
     lane="failed",
     job_ids=["01A...", "01B...", "01C..."]
 )
 ```
-
--   Max 100 per call
--   Strict lane validation
--   Atomic per batch
+**Rules:**
+- Max 100 per call
+- Strict lane validation
+- Atomic per batch
 
 ------------------------------------------------------------------------
 
-## pause()
+### Pause()
 
-``` python
+```bash
 pause_result = omniq.pause(
     queue="demo",
 )
@@ -258,34 +266,42 @@ is_paused = omniq.is_paused(
     queue="demo",
 )
 ```
-------------------------------------------------------------------------
-
-# Handler Context
-
-Inside `handler(ctx)`:
-
--   `queue`
--   `job_id`
--   `payload_raw`
--   `payload`
--   `attempt`
--   `lock_until_ms`
--   `lease_token`
--   `gid`
--   `exec`
+**Rules:**
+- Max 100 per call
+- Strict lane validation
+- Atomic per batch
 
 ------------------------------------------------------------------------
 
-# Child Ack Control (Parent / Child Workflows)
+## Child ACK Control (Parent/Child Workflows)
 
-A handler-driven primitive for fan-out workflows.
+This primitive enables **fan-out workflows**, where a parent job spawns
+multiple child jobs that can run in parallel across one or more queues.
 
-No TTL. Cleanup happens only when counter reaches zero.
+If you want to learn more about the internal execution model and architecture,
+see the core project: **[OmniQ](https://github.com/not-empty/omniq)**.
 
-## Parent Example
+Each child job acknowledges its completion using a **shared completion key**.
+OmniQ maintains an **atomic counter in Redis** that tracks how many child jobs
+are still pending.
+
+When a child finishes, it calls `child_ack()`, which decrements the counter
+and returns the number of remaining jobs. When the counter reaches `0`,
+it indicates that **all child jobs have completed**.
+
+The mechanism is **idempotent and safe under retries**, ensuring that
+duplicate executions do not corrupt the completion tracking.
+
+No TTL is used, the counter is automatically cleaned up when the value
+reaches zero.
+
+------------------------------------------------------------------------
+
+### Parent Example
 
 The first queue will receive a document with 5 pages
-``` python
+
+```python
 # importing the lib
 from omniq.client import OmniqClient
 
@@ -306,8 +322,10 @@ job_id = omniq.publish(
 print("OK", job_id)
 ```
 
-The first consumer will publish a job for each page passing the unique key for childs tracking
-``` python
+The first consumer will publish a job for each page passing the unique key
+for childs tracking.
+
+```python
 # importing the lib
 from omniq.client import OmniqClient
 
@@ -328,11 +346,14 @@ job_id = omniq.publish(
 print("OK", job_id)
 ```
 
-## Child Example
+------------------------------------------------------------------------
 
-The second consumer will deal with each page and ack each child (alerting when the last page was processed)
+### Child Example
 
-``` python
+The second consumer will deal with each page and ack each (alerting whe the last
+page was processed).
+
+```python
 import time
 
 # importing the lib
@@ -375,35 +396,34 @@ omniq.consume(
 )
 ```
 
-Properties:
-
--   Idempotent decrement
--   Safe under retries
--   Cross-queue safe
--   Fully business-logic driven
+**Propeties:**
+- Idempotent decrement
+- Safe under retries
+- Cross-queue safe
+- Fully business-logic driven
 
 ------------------------------------------------------------------------
 
 ## Grouped Jobs
 
-``` python
+```python
 # if you provide a gid (group_id) you can limit the parallel execution for jobs in the same group
 omniq.publish(queue="demo", payload={"i": 1}, gid="company:acme", group_limit=1)
 
 # you can also publis ungrouped jobs that will also be executed (fairness by round-robin algorithm)
 omniq.publish(queue="demo", payload={"i": 2})
 ```
-
--   FIFO inside group
--   Groups execute in parallel
--   Concurrency limited per group
+- FIFO inside group
+- Groups execute in parallel
+- Concurrency limited per group
 
 ------------------------------------------------------------------------
 
 ## Pause and Resume inside the consumer
 
-You publish your job as usual
-``` python
+You publish your as usual
+
+```python
 # importing the lib
 from omniq.client import OmniqClient
 
@@ -423,7 +443,8 @@ print("OK", job_id)
 ```
 
 Inside your consumer you can pause/resume your queue (or another one)
-``` python
+
+```python
 import time
 
 # importing the lib
@@ -486,9 +507,12 @@ omniq.consume(
 )
 ```
 
+------------------------------------------------------------------------
+
 ## Examples
 
-All examples can be found in the `./examples` folder.
+Additional usage examples demonstrating common patterns can be found
+in the `/examples` folder.
 
 ------------------------------------------------------------------------
 
