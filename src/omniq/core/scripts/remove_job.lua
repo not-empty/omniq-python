@@ -28,6 +28,15 @@ local function dec_floor0(key)
   return v
 end
 
+local function hincrby_floor0(key, field, delta)
+  local v = to_i(redis.call("HINCRBY", key, field, delta))
+  if v < 0 then
+    redis.call("HSET", key, field, "0")
+    return 0
+  end
+  return v
+end
+
 local function group_limit_for(base, gid)
   local lim = to_i(redis.call("GET", base .. ":g:" .. gid .. ":limit"))
   if lim <= 0 then return DEFAULT_GROUP_LIMIT end
@@ -43,6 +52,8 @@ local k_delayed   = base .. ":delayed"
 local k_failed    = base .. ":failed"
 local k_completed = base .. ":completed"
 local k_gready    = base .. ":groups:ready"
+local k_stats  = base .. ":stats"
+local k_queues = "omniq:queues"
 
 if redis.call("EXISTS", k_job) ~= 1 then
   return {"ERR", "NO_JOB"}
@@ -86,6 +97,7 @@ if gid ~= "" then
 end
 
 local removed = 0
+local groups_ready_delta = 0
 
 if lane == "wait" then
   removed = redis.call("LREM", k_wait, 1, job_id)
@@ -104,16 +116,27 @@ elseif lane == "completed" then
 
 elseif lane == "gwait" then
   local k_gwait = base .. ":g:" .. gid .. ":wait"
+
+  local was_ready = (redis.call("ZSCORE", k_gready, gid) ~= false)
+
   removed = redis.call("LREM", k_gwait, 1, job_id)
 
   local inflight = to_i(redis.call("GET", base .. ":g:" .. gid .. ":inflight"))
   local limit = group_limit_for(base, gid)
   local qlen = to_i(redis.call("LLEN", k_gwait))
 
-  if qlen > 0 and inflight < limit then
-    redis.call("ZADD", k_gready, 0, gid)
+  local should_be_ready = (qlen > 0 and inflight < limit)
+
+  if should_be_ready then
+    local added = redis.call("ZADD", k_gready, "NX", 0, gid)
+    if added == 1 then
+      groups_ready_delta = groups_ready_delta + 1
+    end
   else
-    redis.call("ZREM", k_gready, gid)
+    local removed_ready = redis.call("ZREM", k_gready, gid)
+    if removed_ready == 1 then
+      groups_ready_delta = groups_ready_delta - 1
+    end
   end
 end
 
@@ -122,5 +145,31 @@ if (lane == "wait" or lane == "failed" or lane == "completed" or lane == "gwait"
 end
 
 redis.call("DEL", k_job)
+
+redis.call("SADD", k_queues, base)
+
+if lane == "wait" then
+  hincrby_floor0(k_stats, "waiting", -1)
+  hincrby_floor0(k_stats, "waiting_total", -1)
+
+elseif lane == "delayed" then
+  hincrby_floor0(k_stats, "delayed", -1)
+
+elseif lane == "failed" then
+  hincrby_floor0(k_stats, "failed", -1)
+
+elseif lane == "completed" then
+  hincrby_floor0(k_stats, "completed_kept", -1)
+
+elseif lane == "gwait" then
+  hincrby_floor0(k_stats, "group_waiting", -1)
+  hincrby_floor0(k_stats, "waiting_total", -1)
+
+  if groups_ready_delta ~= 0 then
+    hincrby_floor0(k_stats, "groups_ready", groups_ready_delta)
+  end
+end
+
+redis.call("HSET", k_stats, "last_activity_ms", tostring(redis.call("TIME")[1] * 1000))
 
 return {"OK"}

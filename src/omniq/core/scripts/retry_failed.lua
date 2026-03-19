@@ -19,6 +19,15 @@ local function to_i(v)
   return math.floor(n)
 end
 
+local function hincrby_floor0(key, field, delta)
+  local v = to_i(redis.call("HINCRBY", key, field, delta))
+  if v < 0 then
+    redis.call("HSET", key, field, "0")
+    return 0
+  end
+  return v
+end
+
 local base = derive_base(anchor)
 
 local k_job     = base .. ":job:" .. job_id
@@ -27,6 +36,8 @@ local k_active  = base .. ":active"
 local k_delayed = base .. ":delayed"
 local k_failed  = base .. ":failed"
 local k_gready  = base .. ":groups:ready"
+local k_stats  = base .. ":stats"
+local k_queues = "omniq:queues"
 
 if redis.call("EXISTS", k_job) ~= 1 then
   return {"ERR", "NO_JOB"}
@@ -53,6 +64,12 @@ redis.call("HSET", k_job,
 
 local gid = redis.call("HGET", k_job, "gid") or ""
 
+local inc_waiting = 0
+local inc_group_waiting = 0
+local inc_waiting_total = 0
+local dec_failed = -1
+local inc_groups_ready = 0
+
 if gid ~= "" then
   local k_gwait     = base .. ":g:" .. gid .. ":wait"
   local k_ginflight = base .. ":g:" .. gid .. ":inflight"
@@ -60,15 +77,44 @@ if gid ~= "" then
 
   redis.call("RPUSH", k_gwait, job_id)
 
+  inc_group_waiting = 1
+  inc_waiting_total = 1
+
   local inflight = to_i(redis.call("GET", k_ginflight))
   local limit = to_i(redis.call("GET", k_glimit))
   if limit <= 0 then limit = DEFAULT_GROUP_LIMIT end
 
   if inflight < limit then
-    redis.call("ZADD", k_gready, now_ms, gid)
+    local added = redis.call("ZADD", k_gready, "NX", now_ms, gid)
+    if added == 1 then
+      inc_groups_ready = 1
+    end
   end
 else
   redis.call("RPUSH", k_wait, job_id)
+  inc_waiting = 1
+  inc_waiting_total = 1
 end
+
+redis.call("SADD", k_queues, base)
+hincrby_floor0(k_stats, "failed", dec_failed)
+
+if inc_waiting ~= 0 then
+  redis.call("HINCRBY", k_stats, "waiting", inc_waiting)
+end
+
+if inc_group_waiting ~= 0 then
+  redis.call("HINCRBY", k_stats, "group_waiting", inc_group_waiting)
+end
+
+if inc_waiting_total ~= 0 then
+  redis.call("HINCRBY", k_stats, "waiting_total", inc_waiting_total)
+end
+
+if inc_groups_ready ~= 0 then
+  redis.call("HINCRBY", k_stats, "groups_ready", inc_groups_ready)
+end
+
+redis.call("HSET", k_stats, "last_activity_ms", tostring(now_ms))
 
 return {"OK"}

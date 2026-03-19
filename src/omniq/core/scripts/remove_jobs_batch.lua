@@ -1,6 +1,7 @@
 local anchor = KEYS[1]
 local lane   = ARGV[1] or ""
 local count  = tonumber(ARGV[2] or "0")
+local now_ms = tonumber(ARGV[3 + count] or "0")
 
 local DEFAULT_GROUP_LIMIT = 1
 local MAX_BATCH = 100
@@ -29,6 +30,15 @@ local function dec_floor0(key)
   return v
 end
 
+local function hincrby_floor0(key, field, delta)
+  local v = to_i(redis.call("HINCRBY", key, field, delta))
+  if v < 0 then
+    redis.call("HSET", key, field, "0")
+    return 0
+  end
+  return v
+end
+
 local function group_limit_for(base, gid)
   local lim = to_i(redis.call("GET", base .. ":g:" .. gid .. ":limit"))
   if lim <= 0 then return DEFAULT_GROUP_LIMIT end
@@ -52,6 +62,8 @@ local k_delayed   = base .. ":delayed"
 local k_failed    = base .. ":failed"
 local k_completed = base .. ":completed"
 local k_gready    = base .. ":groups:ready"
+local k_stats  = base .. ":stats"
+local k_queues = "omniq:queues"
 
 local out = {}
 
@@ -79,6 +91,15 @@ end
 if #ARGV < (2 + count) then
   return {"ERR", "BAD_ARGS"}
 end
+
+local dec_waiting = 0
+local dec_group_waiting = 0
+local dec_waiting_total = 0
+local dec_delayed = 0
+local dec_failed = 0
+local dec_completed_kept = 0
+local groups_ready_delta = 0
+local removed_ok = 0
 
 for i = 1, count do
   local job_id = ARGV[2 + i]
@@ -117,6 +138,9 @@ for i = 1, count do
               push(job_id, "ERR", "NOT_IN_LANE")
             else
               redis.call("DEL", k_job)
+              dec_waiting = dec_waiting - 1
+              dec_waiting_total = dec_waiting_total - 1
+              removed_ok = removed_ok + 1
               push(job_id, "OK", nil)
             end
 
@@ -124,9 +148,15 @@ for i = 1, count do
             if redis.call("ZSCORE", k_delayed, job_id) == false then
               push(job_id, "ERR", "NOT_IN_LANE")
             else
-              redis.call("ZREM", k_delayed, job_id)
-              redis.call("DEL", k_job)
-              push(job_id, "OK", nil)
+              removed = redis.call("ZREM", k_delayed, job_id)
+              if removed <= 0 then
+                push(job_id, "ERR", "NOT_IN_LANE")
+              else
+                redis.call("DEL", k_job)
+                dec_delayed = dec_delayed - 1
+                removed_ok = removed_ok + 1
+                push(job_id, "OK", nil)
+              end
             end
 
           elseif lane == "failed" then
@@ -135,6 +165,8 @@ for i = 1, count do
               push(job_id, "ERR", "NOT_IN_LANE")
             else
               redis.call("DEL", k_job)
+              dec_failed = dec_failed - 1
+              removed_ok = removed_ok + 1
               push(job_id, "OK", nil)
             end
 
@@ -144,6 +176,8 @@ for i = 1, count do
               push(job_id, "ERR", "NOT_IN_LANE")
             else
               redis.call("DEL", k_job)
+              dec_completed_kept = dec_completed_kept - 1
+              removed_ok = removed_ok + 1
               push(job_id, "OK", nil)
             end
 
@@ -158,12 +192,21 @@ for i = 1, count do
               local qlen = to_i(redis.call("LLEN", k_gwait))
 
               if qlen > 0 and inflight < limit then
-                redis.call("ZADD", k_gready, 0, gid)
+                local added = redis.call("ZADD", k_gready, "NX", 0, gid)
+                if added == 1 then
+                  groups_ready_delta = groups_ready_delta + 1
+                end
               else
-                redis.call("ZREM", k_gready, gid)
+                local removed_ready = redis.call("ZREM", k_gready, gid)
+                if removed_ready == 1 then
+                  groups_ready_delta = groups_ready_delta - 1
+                end
               end
 
               redis.call("DEL", k_job)
+              dec_group_waiting = dec_group_waiting - 1
+              dec_waiting_total = dec_waiting_total - 1
+              removed_ok = removed_ok + 1
               push(job_id, "OK", nil)
             end
           end
@@ -171,6 +214,40 @@ for i = 1, count do
       end
     end
   end
+end
+
+if removed_ok > 0 then
+  redis.call("SADD", k_queues, base)
+
+  if dec_waiting ~= 0 then
+    hincrby_floor0(k_stats, "waiting", dec_waiting)
+  end
+
+  if dec_group_waiting ~= 0 then
+    hincrby_floor0(k_stats, "group_waiting", dec_group_waiting)
+  end
+
+  if dec_waiting_total ~= 0 then
+    hincrby_floor0(k_stats, "waiting_total", dec_waiting_total)
+  end
+
+  if dec_delayed ~= 0 then
+    hincrby_floor0(k_stats, "delayed", dec_delayed)
+  end
+
+  if dec_failed ~= 0 then
+    hincrby_floor0(k_stats, "failed", dec_failed)
+  end
+
+  if dec_completed_kept ~= 0 then
+    hincrby_floor0(k_stats, "completed_kept", dec_completed_kept)
+  end
+
+  if groups_ready_delta ~= 0 then
+    hincrby_floor0(k_stats, "groups_ready", groups_ready_delta)
+  end
+
+  redis.call("HSET", k_stats, "last_activity_ms", tostring(now_ms))
 end
 
 return out
