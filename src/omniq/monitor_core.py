@@ -96,6 +96,12 @@ class QueueMonitorCore:
             return None
         return self._decode_hash(raw)
 
+    def _is_group_ready(self, base: str, gid: str) -> bool:
+        try:
+            return self._r.zscore(self._ready_key(base), gid) is not None
+        except Exception:
+            return False
+
     def _job_info_from_map(self, job_id: str, m: Dict[str, Any]) -> JobInfo:
         return JobInfo(
             job_id=job_id,
@@ -246,8 +252,6 @@ class QueueMonitorCore:
         normalized_gids = [as_str(g) for g in gids if as_str(g)]
         normalized_gids = normalized_gids[: self.MAX_GROUP_LIMIT]
 
-        ready_set = set(self.groups_ready(queue, limit=max(len(normalized_gids), 1)))
-
         out: list[GroupStatus] = []
         for gid_s in normalized_gids:
             try:
@@ -272,7 +276,7 @@ class QueueMonitorCore:
                     gid=gid_s,
                     inflight=inflight,
                     limit=limit,
-                    ready=gid_s in ready_set,
+                    ready=self._is_group_ready(base, gid_s),
                     waiting_count=waiting_count,
                 )
             )

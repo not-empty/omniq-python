@@ -30,6 +30,13 @@ class ReserveJob:
     lease_token: str
 
 AckFailResult = Tuple[Literal["RETRY", "FAILED"], Optional[int]]
-BatchRemoveResult = List[Tuple[str, str, Optional[str]]]
-BatchRetryFailedResult = List[Tuple[str, str, Optional[str]]]
+
+@dataclass(frozen=True)
+class BatchResultItem:
+    job_id: str
+    status: str
+    reason: Optional[str] = None
+
+BatchRemoveResult = List[BatchResultItem]
+BatchRetryFailedResult = List[BatchResultItem]
 ReserveResult = Union[None, ReservePaused, ReserveJob]

@@ -7,7 +7,7 @@ from threading import Lock
 
 from .clock import now_ms
 from .ids import new_ulid
-from .types import ReservePaused, ReserveJob, ReserveResult, AckFailResult, BatchRemoveResult, BatchRetryFailedResult
+from .types import ReservePaused, ReserveJob, ReserveResult, AckFailResult, BatchRemoveResult, BatchRetryFailedResult, BatchResultItem
 from .transport import RedisLike
 from .scripts import OmniqScripts
 from .helper import queue_base, queue_anchor, childs_anchor
@@ -373,7 +373,7 @@ class OmniqOps:
                 i += 3
             else:
                 i += 2
-            out.append((job_id, status, reason))
+            out.append(BatchResultItem(job_id=job_id, status=status, reason=reason))
         return out
 
     def remove_job(self, *, queue: str, job_id: str, lane: str) -> str:
@@ -442,7 +442,7 @@ class OmniqOps:
                 i += 3
             else:
                 i += 2
-            out.append((job_id, status, reason))
+            out.append(BatchResultItem(job_id=job_id, status=status, reason=reason))
         return out
     
     def childs_init(self, *, key: str, expected: int) -> None:
