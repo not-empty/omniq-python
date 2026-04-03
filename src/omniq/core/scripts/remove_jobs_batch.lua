@@ -56,14 +56,19 @@ end
 
 local base = derive_base(anchor)
 
-local k_active    = base .. ":active"
-local k_wait      = base .. ":wait"
-local k_delayed   = base .. ":delayed"
-local k_failed    = base .. ":failed"
-local k_completed = base .. ":completed"
-local k_gready    = base .. ":groups:ready"
-local k_stats  = base .. ":stats"
-local k_queues = "omniq:queues"
+local k_active        = base .. ":active"
+local k_wait          = base .. ":wait"
+local k_delayed       = base .. ":delayed"
+local k_failed        = base .. ":failed"
+local k_completed     = base .. ":completed"
+local k_gready        = base .. ":groups:ready"
+local k_stats         = base .. ":stats"
+local k_queues        = "omniq:queues"
+local k_idx_wait      = base .. ":idx:wait"
+local k_idx_active    = base .. ":idx:active"
+local k_idx_delayed   = base .. ":idx:delayed"
+local k_idx_failed    = base .. ":idx:failed"
+local k_idx_completed = base .. ":idx:completed"
 
 local out = {}
 
@@ -137,6 +142,8 @@ for i = 1, count do
             if removed <= 0 then
               push(job_id, "ERR", "NOT_IN_LANE")
             else
+              redis.call("ZREM", k_idx_wait, job_id)
+
               redis.call("DEL", k_job)
               dec_waiting = dec_waiting - 1
               dec_waiting_total = dec_waiting_total - 1
@@ -152,6 +159,8 @@ for i = 1, count do
               if removed <= 0 then
                 push(job_id, "ERR", "NOT_IN_LANE")
               else
+                redis.call("ZREM", k_idx_delayed, job_id)
+
                 redis.call("DEL", k_job)
                 dec_delayed = dec_delayed - 1
                 removed_ok = removed_ok + 1
@@ -164,6 +173,8 @@ for i = 1, count do
             if removed <= 0 then
               push(job_id, "ERR", "NOT_IN_LANE")
             else
+              redis.call("ZREM", k_idx_failed, job_id)
+
               redis.call("DEL", k_job)
               dec_failed = dec_failed - 1
               removed_ok = removed_ok + 1
@@ -175,6 +186,8 @@ for i = 1, count do
             if removed <= 0 then
               push(job_id, "ERR", "NOT_IN_LANE")
             else
+              redis.call("ZREM", k_idx_completed, job_id)
+
               redis.call("DEL", k_job)
               dec_completed_kept = dec_completed_kept - 1
               removed_ok = removed_ok + 1
@@ -202,6 +215,8 @@ for i = 1, count do
                   groups_ready_delta = groups_ready_delta - 1
                 end
               end
+
+              redis.call("ZREM", k_idx_wait, job_id)
 
               redis.call("DEL", k_job)
               dec_group_waiting = dec_group_waiting - 1

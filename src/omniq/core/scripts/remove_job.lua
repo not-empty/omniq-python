@@ -45,15 +45,20 @@ end
 
 local base = derive_base(anchor)
 
-local k_job       = base .. ":job:" .. job_id
-local k_wait      = base .. ":wait"
-local k_active    = base .. ":active"
-local k_delayed   = base .. ":delayed"
-local k_failed    = base .. ":failed"
-local k_completed = base .. ":completed"
-local k_gready    = base .. ":groups:ready"
-local k_stats  = base .. ":stats"
-local k_queues = "omniq:queues"
+local k_job           = base .. ":job:" .. job_id
+local k_wait          = base .. ":wait"
+local k_active        = base .. ":active"
+local k_delayed       = base .. ":delayed"
+local k_failed        = base .. ":failed"
+local k_completed     = base .. ":completed"
+local k_gready        = base .. ":groups:ready"
+local k_stats         = base .. ":stats"
+local k_queues        = "omniq:queues"
+local k_idx_wait      = base .. ":idx:wait"
+local k_idx_active    = base .. ":idx:active"
+local k_idx_delayed   = base .. ":idx:delayed"
+local k_idx_failed    = base .. ":idx:failed"
+local k_idx_completed = base .. ":idx:completed"
 
 if redis.call("EXISTS", k_job) ~= 1 then
   return {"ERR", "NO_JOB"}
@@ -84,7 +89,6 @@ if lane == "gwait" and (gid == nil or gid == "") then
   return {"ERR", "LANE_MISMATCH"}
 end
 
-local ginflight_dec = 0
 if gid ~= "" then
   local lt = redis.call("HGET", k_job, "lease_token") or ""
   local lu = redis.call("HGET", k_job, "lock_until_ms") or ""
@@ -92,7 +96,6 @@ if gid ~= "" then
   if looks_reserved then
     local k_ginflight = base .. ":g:" .. gid .. ":inflight"
     dec_floor0(k_ginflight)
-    ginflight_dec = 1
   end
 end
 
@@ -116,8 +119,6 @@ elseif lane == "completed" then
 
 elseif lane == "gwait" then
   local k_gwait = base .. ":g:" .. gid .. ":wait"
-
-  local was_ready = (redis.call("ZSCORE", k_gready, gid) ~= false)
 
   removed = redis.call("LREM", k_gwait, 1, job_id)
 
@@ -149,19 +150,24 @@ redis.call("DEL", k_job)
 redis.call("SADD", k_queues, base)
 
 if lane == "wait" then
+  redis.call("ZREM", k_idx_wait, job_id)
   hincrby_floor0(k_stats, "waiting", -1)
   hincrby_floor0(k_stats, "waiting_total", -1)
 
 elseif lane == "delayed" then
+  redis.call("ZREM", k_idx_delayed, job_id)
   hincrby_floor0(k_stats, "delayed", -1)
 
 elseif lane == "failed" then
+  redis.call("ZREM", k_idx_failed, job_id)
   hincrby_floor0(k_stats, "failed", -1)
 
 elseif lane == "completed" then
+  redis.call("ZREM", k_idx_completed, job_id)
   hincrby_floor0(k_stats, "completed_kept", -1)
 
 elseif lane == "gwait" then
+  redis.call("ZREM", k_idx_wait, job_id)
   hincrby_floor0(k_stats, "group_waiting", -1)
   hincrby_floor0(k_stats, "waiting_total", -1)
 

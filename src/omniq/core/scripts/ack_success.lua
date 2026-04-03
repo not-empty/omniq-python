@@ -16,12 +16,14 @@ end
 
 local base = derive_base(anchor)
 
-local k_job       = base .. ":job:" .. job_id
-local k_active    = base .. ":active"
-local k_completed = base .. ":completed"
-local k_gready    = base .. ":groups:ready"
-local k_stats  = base .. ":stats"
-local k_queues = "omniq:queues"
+local k_job           = base .. ":job:" .. job_id
+local k_active        = base .. ":active"
+local k_completed     = base .. ":completed"
+local k_gready        = base .. ":groups:ready"
+local k_stats         = base .. ":stats"
+local k_queues        = "omniq:queues"
+local k_idx_active    = base .. ":idx:active"
+local k_idx_completed = base .. ":idx:completed"
 
 local function to_i(v)
   if v == false or v == nil or v == '' then return 0 end
@@ -73,9 +75,13 @@ redis.call("SADD", k_queues, base)
 redis.call("HSET", k_job,
   "state", "completed",
   "updated_ms", tostring(now_ms),
+  "completed_ms", tostring(now_ms),
   "lease_token", "",
   "lock_until_ms", ""
 )
+
+redis.call("ZREM", k_idx_active, job_id)
+redis.call("ZADD", k_idx_completed, now_ms, job_id)
 
 hincrby_floor0(k_stats, "active", -1)
 redis.call("HSET", k_stats,
@@ -102,6 +108,7 @@ redis.call("LPUSH", k_completed, job_id)
 while redis.call("LLEN", k_completed) > KEEP_COMPLETED do
   local old_id = redis.call("RPOP", k_completed)
   if old_id then
+    redis.call("ZREM", k_idx_completed, old_id)
     redis.call("DEL", base .. ":job:" .. old_id)
   end
 end

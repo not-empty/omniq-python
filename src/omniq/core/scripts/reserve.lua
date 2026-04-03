@@ -19,13 +19,15 @@ end
 local DEFAULT_GROUP_LIMIT = 1
 local MAX_GROUP_POPS = 10
 
-local k_wait      = base .. ":wait"
-local k_active    = base .. ":active"
-local k_gready    = base .. ":groups:ready"
-local k_rr        = base .. ":lane:rr"
-local k_token_seq = base .. ":lease:seq"
-local k_stats  = base .. ":stats"
-local k_queues = "omniq:queues"
+local k_wait       = base .. ":wait"
+local k_active     = base .. ":active"
+local k_gready     = base .. ":groups:ready"
+local k_rr         = base .. ":lane:rr"
+local k_token_seq  = base .. ":lease:seq"
+local k_stats      = base .. ":stats"
+local k_queues     = "omniq:queues"
+local k_idx_wait   = base .. ":idx:wait"
+local k_idx_active = base .. ":idx:active"
 
 local function to_i(v)
   if v == false or v == nil or v == '' then return 0 end
@@ -59,16 +61,27 @@ local function lease_job(job_id)
 
   local payload = redis.call("HGET", k_job, "payload") or ""
   local gid = redis.call("HGET", k_job, "gid") or ""
+  local first_started_ms = redis.call("HGET", k_job, "first_started_ms") or ""
 
   local lease_token = new_lease_token(job_id)
+
+  if first_started_ms == "" then
+    redis.call("HSET", k_job,
+      "first_started_ms", tostring(now_ms)
+    )
+  end
 
   redis.call("HSET", k_job,
     "state", "active",
     "attempt", tostring(attempt),
     "lock_until_ms", tostring(lock_until),
     "lease_token", lease_token,
-    "updated_ms", tostring(now_ms)
+    "updated_ms", tostring(now_ms),
+    "last_started_ms", tostring(now_ms)
   )
+
+  redis.call("ZREM", k_idx_wait, job_id)
+  redis.call("ZADD", k_idx_active, now_ms, job_id)
 
   redis.call("ZADD", k_active, lock_until, job_id)
 
