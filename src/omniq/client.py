@@ -90,11 +90,12 @@ class OmniqClient:
         payload: Any,
         job_id: Optional[str] = None,
         max_attempts: int = 3,
-        timeout_ms: int = 60_000,
+        timeout_ms: int = 30_000,
         backoff_ms: int = 5_000,
         due_ms: int = 0,
         gid: Optional[str] = None,
         group_limit: int = 0,
+        now_ms_override: int = 0,
     ) -> str:
         return self._ops.publish(
             queue=queue,
@@ -106,6 +107,7 @@ class OmniqClient:
             due_ms=due_ms,
             gid=gid,
             group_limit=group_limit,
+            now_ms_override=now_ms_override,
         )
 
     def publish_json(
@@ -115,11 +117,12 @@ class OmniqClient:
         payload: Any,
         job_id: Optional[str] = None,
         max_attempts: int = 3,
-        timeout_ms: int = 60_000,
+        timeout_ms: int = 30_000,
         backoff_ms: int = 5_000,
         due_ms: int = 0,
         gid: Optional[str] = None,
         group_limit: int = 0,
+        now_ms_override: int = 0,
     ) -> str:
         if isinstance(payload, (dict, list)):
             structured = payload
@@ -154,6 +157,7 @@ class OmniqClient:
             due_ms=due_ms,
             gid=gid,
             group_limit=group_limit,
+            now_ms_override=now_ms_override,
         )
 
     def reserve(self, *, queue: str, now_ms_override: int = 0) -> ReserveResult:

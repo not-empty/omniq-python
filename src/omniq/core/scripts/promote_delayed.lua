@@ -14,9 +14,11 @@ end
 
 local base = derive_base(anchor)
 
-local k_delayed = base .. ":delayed"
-local k_wait    = base .. ":wait"
-local k_gready  = base .. ":groups:ready"
+local k_delayed     = base .. ":delayed"
+local k_wait        = base .. ":wait"
+local k_gready      = base .. ":groups:ready"
+local k_idx_delayed = base .. ":idx:delayed"
+local k_idx_wait    = base .. ":idx:wait"
 
 local k_stats  = base .. ":stats"
 local k_queues = "omniq:queues"
@@ -58,6 +60,9 @@ for i=1,#ids do
   if redis.call("ZREM", k_delayed, job_id) == 1 then
     local k_job = base .. ":job:" .. job_id
     redis.call("HSET", k_job, "state", "wait", "updated_ms", tostring(now_ms))
+
+    redis.call("ZREM", k_idx_delayed, job_id)
+    redis.call("ZADD", k_idx_wait, now_ms, job_id)
 
     dec_delayed = dec_delayed - 1
 

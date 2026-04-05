@@ -22,12 +22,14 @@ end
 
 local base = derive_base(anchor)
 
-local k_job        = base .. ":job:" .. job_id
-local k_delayed    = base .. ":delayed"
-local k_wait       = base .. ":wait"
-local k_has_groups = base .. ":has_groups"
-local k_stats      = base .. ":stats"
-local k_queues     = "omniq:queues"
+local k_job           = base .. ":job:" .. job_id
+local k_delayed       = base .. ":delayed"
+local k_wait          = base .. ":wait"
+local k_has_groups    = base .. ":has_groups"
+local k_stats         = base .. ":stats"
+local k_queues        = "omniq:queues"
+local k_idx_wait      = base .. ":idx:wait"
+local k_idx_delayed   = base .. ":idx:delayed"
 local is_grouped = (gid ~= nil and gid ~= "")
 
 redis.call("SADD", k_queues, base)
@@ -43,7 +45,12 @@ if is_grouped then
     "timeout_ms", tostring(timeout_ms),
     "backoff_ms", tostring(backoff_ms),
     "created_ms", tostring(now_ms),
-    "updated_ms", tostring(now_ms)
+    "updated_ms", tostring(now_ms),
+    "queued_ms", tostring(now_ms),
+    "first_started_ms", "",
+    "last_started_ms", "",
+    "completed_ms", "",
+    "failed_ms", ""
   )
 
   redis.call("SET", k_has_groups, "1")
@@ -64,12 +71,18 @@ else
     "timeout_ms", tostring(timeout_ms),
     "backoff_ms", tostring(backoff_ms),
     "created_ms", tostring(now_ms),
-    "updated_ms", tostring(now_ms)
+    "updated_ms", tostring(now_ms),
+    "queued_ms", tostring(now_ms),
+    "first_started_ms", "",
+    "last_started_ms", "",
+    "completed_ms", "",
+    "failed_ms", ""
   )
 end
 
 if due_ms ~= nil and due_ms > now_ms then
   redis.call("ZADD", k_delayed, due_ms, job_id)
+  redis.call("ZADD", k_idx_delayed, now_ms, job_id)
   redis.call("HSET", k_job, "state", "delayed", "due_ms", tostring(due_ms))
   redis.call("HINCRBY", k_stats, "delayed", 1)
   redis.call("HSET", k_stats,
@@ -80,6 +93,7 @@ else
   if is_grouped then
     local k_gwait = base .. ":g:" .. gid .. ":wait"
     redis.call("RPUSH", k_gwait, job_id)
+    redis.call("ZADD", k_idx_wait, now_ms, job_id)
     redis.call("HINCRBY", k_stats, "group_waiting", 1)
     redis.call("HINCRBY", k_stats, "waiting_total", 1)
     redis.call("HSET", k_stats,
@@ -100,6 +114,7 @@ else
     end
   else
     redis.call("RPUSH", k_wait, job_id)
+    redis.call("ZADD", k_idx_wait, now_ms, job_id)
     redis.call("HINCRBY", k_stats, "waiting", 1)
     redis.call("HINCRBY", k_stats, "waiting_total", 1)
     redis.call("HSET", k_stats,

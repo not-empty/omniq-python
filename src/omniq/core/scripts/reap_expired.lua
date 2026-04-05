@@ -14,12 +14,15 @@ end
 
 local base = derive_base(anchor)
 
-local k_active  = base .. ":active"
-local k_delayed = base .. ":delayed"
-local k_failed  = base .. ":failed"
-local k_gready  = base .. ":groups:ready"
-local k_stats  = base .. ":stats"
-local k_queues = "omniq:queues"
+local k_active      = base .. ":active"
+local k_delayed     = base .. ":delayed"
+local k_failed      = base .. ":failed"
+local k_gready      = base .. ":groups:ready"
+local k_stats       = base .. ":stats"
+local k_queues      = "omniq:queues"
+local k_idx_active  = base .. ":idx:active"
+local k_idx_delayed = base .. ":idx:delayed"
+local k_idx_failed  = base .. ":idx:failed"
 
 local function to_i(v)
   if v == false or v == nil or v == '' then return 0 end
@@ -73,6 +76,7 @@ for i=1,#ids do
       local k_job = base .. ":job:" .. job_id
 
       if redis.call("EXISTS", k_job) == 0 then
+        redis.call("ZREM", k_idx_active, job_id)
         reaped = reaped + 1
       else
         redis.call("HSET", k_job, "lease_token", "")
@@ -100,9 +104,13 @@ for i=1,#ids do
           redis.call("HSET", k_job,
             "state", "failed",
             "updated_ms", tostring(now_ms),
+            "failed_ms", tostring(now_ms),
             "lease_token", "",
             "lock_until_ms", ""
           )
+          redis.call("ZREM", k_idx_active, job_id)
+          redis.call("ZADD", k_idx_failed, now_ms, job_id)
+
           redis.call("LPUSH", k_failed, job_id)
           inc_failed = inc_failed + 1
         else
@@ -114,6 +122,9 @@ for i=1,#ids do
             "lease_token", "",
             "lock_until_ms", ""
           )
+          redis.call("ZREM", k_idx_active, job_id)
+          redis.call("ZADD", k_idx_delayed, now_ms, job_id)
+
           redis.call("ZADD", k_delayed, due_ms, job_id)
           inc_delayed = inc_delayed + 1
         end

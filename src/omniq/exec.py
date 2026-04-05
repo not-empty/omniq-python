@@ -15,7 +15,7 @@ class Exec:
         payload: Any,
         job_id: Optional[str] = None,
         max_attempts: int = 3,
-        timeout_ms: int = 60_000,
+        timeout_ms: int = 30_000,
         backoff_ms: int = 5_000,
         due_ms: int = 0,
         gid: Optional[str] = None,
