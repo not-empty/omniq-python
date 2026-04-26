@@ -4,7 +4,7 @@ from typing import Callable, Optional, Any
 from ._ops import OmniqOps
 from .scripts import load_scripts, default_scripts_dir
 from .transport import RedisConnOpts, build_redis_client, RedisLike
-from .types import ReserveResult, AckFailResult
+from .types import ReserveResult, AckFailResult, JobCtx
 from .helper import queue_base
 
 def _safe_close_redis(r: Any) -> None:
@@ -209,7 +209,7 @@ class OmniqClient:
         self,
         *,
         queue: str,
-        handler: Callable[[Any], None],
+        handler: Callable[[JobCtx], None],
         poll_interval_s: float = 0.05,
         promote_interval_s: float = 1.0,
         promote_batch: int = 1000,

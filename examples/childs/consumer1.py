@@ -1,8 +1,9 @@
 # importing the lib
 from omniq.client import OmniqClient
+from omniq.types import JobCtx
 
 # creating your handler (ctx will have all the job information and actions)
-def document_worker(ctx):
+def document_worker(ctx: JobCtx):
     
     # getting the data from payload
     document_id = ctx.payload["document_id"]

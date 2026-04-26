@@ -57,6 +57,7 @@ local function lease_job(job_id)
   if timeout_ms <= 0 then timeout_ms = 60000 end
 
   local attempt = to_i(redis.call("HGET", k_job, "attempt")) + 1
+  local max_attempts = to_i(redis.call("HGET", k_job, "max_attempts"))
   local lock_until = now_ms + timeout_ms
 
   local payload = redis.call("HGET", k_job, "payload") or ""
@@ -91,7 +92,7 @@ local function lease_job(job_id)
     "last_reserve_ms", tostring(now_ms)
   )
 
-  return {"JOB", job_id, payload, tostring(lock_until), tostring(attempt), gid, lease_token}
+  return {"JOB", job_id, payload, tostring(lock_until), tostring(attempt), tostring(max_attempts), gid, lease_token}
 end
 
 local function try_ungrouped()

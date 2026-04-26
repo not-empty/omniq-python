@@ -196,6 +196,7 @@ def consume(
                 payload_raw=res.payload,
                 payload=payload_obj,
                 attempt=res.attempt,
+                max_attempts=res.max_attempts,
                 lock_until_ms=res.lock_until_ms,
                 lease_token=res.lease_token,
                 gid=res.gid,
