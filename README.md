@@ -148,9 +148,10 @@ import time
 
 # importing the lib
 from omniq.client import OmniqClient
+from omniq.types import JobCtx
 
 # creating your handler (ctx will have all the job information and actions)
-def my_actions(ctx):
+def my_actions(ctx: JobCtx):
     print("Waiting 2 seconds")
     time.sleep(2)
     print("Done")
@@ -174,16 +175,27 @@ omniq.consume(
 
 ## Handler Context
 
-Inside `handler(ctx)`:
+Inside `handler(ctx: JobCtx)`:
 - `queue`
 - `job_id`
 - `payload_raw`
 - `payload`
 - `attempt`
+- `max_attempts`
 - `lock_until_ms`
 - `lease_token`
 - `gid`
-- `exec` - execution layer (`ctx.exex`)
+- `exec` - execution layer (`ctx.exec`)
+
+Example:
+
+```python
+from omniq.types import JobCtx
+
+def my_actions(ctx: JobCtx):
+    is_last_attempt = ctx.attempt >= ctx.max_attempts
+    print("Last attempt?", is_last_attempt)
+```
 
 ------------------------------------------------------------------------
 
@@ -358,9 +370,10 @@ import time
 
 # importing the lib
 from omniq.client import OmniqClient
+from omniq.types import JobCtx
 
 # creating your handler (ctx will have all the job information and actions)
-def page_worker(ctx):
+def page_worker(ctx: JobCtx):
 
     page = ctx.payload["page"]
     # getting the unique key to track the childs
@@ -449,9 +462,10 @@ import time
 
 # importing the lib
 from omniq.client import OmniqClient
+from omniq.types import JobCtx
 
 # creating your handler (ctx will have all the job information and actions)
-def pause_unpause_example(ctx):
+def pause_unpause_example(ctx: JobCtx):
     print("Waiting 2 seconds")
 
     # checking if this queue it is paused (spoiler: it's not)

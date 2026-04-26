@@ -119,8 +119,9 @@ print("Published:", job_id)
 ``` python
 import time
 from omniq.client import OmniqClient
+from omniq.types import JobCtx
 
-def handler(ctx):
+def handler(ctx: JobCtx):
     print("Processing:", ctx.job_id)
     time.sleep(2)
     print("Done")
@@ -283,7 +284,7 @@ The heartbeat call renews the lease of the currently running job.
 
 ## Handler Context
 
-### Inside handler(ctx):
+### Inside handler(ctx: JobCtx):
 
 | Field          | Description                                |
 |----------------|--------------------------------------------|
@@ -292,6 +293,7 @@ The heartbeat call renews the lease of the currently running job.
 | payload        | Deserialized payload                       |
 | payload_raw    | Raw JSON                                   |
 | attempt        | Current attempt number                     |
+| max_attempts   | Maximum number of attempts for the job     |
 | lock_until_ms  | Lease expiration timestamp                 |
 | lease_token    | Required token for ACK/heartbeat           |
 | gid            | Group identifier                           |
@@ -398,6 +400,8 @@ Can be used externally or inside a handler via ctx.exec.
 ## Parent/Child Flow
 
 ``` python
+from omniq.types import JobCtx
+
 remaining = ctx.exec.child_ack(completion_key)
 
 if remaining == 0:
@@ -406,7 +410,7 @@ if remaining == 0:
 **Returns:**
 - Pending children -> `> 0`
 - Last Child -> `0`
-- Counter error -> `1`
+- Counter error -> `-1`
 
 **Properties:**
 - Idempotent

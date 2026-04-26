@@ -144,7 +144,7 @@ class OmniqOps:
         if res[0] == "PAUSED":
             return ReservePaused()
 
-        if res[0] != "JOB" or len(res) < 7:
+        if res[0] != "JOB" or len(res) < 8:
             raise RuntimeError(f"Unexpected RESERVE response: {res}")
 
         return ReserveJob(
@@ -153,8 +153,9 @@ class OmniqOps:
             payload=str(res[2]),
             lock_until_ms=int(res[3]),
             attempt=int(res[4]),
-            gid=str(res[5] or ""),
-            lease_token=str(res[6] or ""),
+            max_attempts=int(res[5]),
+            gid=str(res[6] or ""),
+            lease_token=str(res[7] or ""),
         )
 
     def heartbeat(self, *, queue: str, job_id: str, lease_token: str, now_ms_override: int = 0) -> int:

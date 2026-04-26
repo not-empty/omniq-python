@@ -2,9 +2,10 @@ import time
 
 # importing the lib
 from omniq.client import OmniqClient
+from omniq.types import JobCtx
 
 # creating your handler (ctx will have all the job information and actions)
-def page_worker(ctx):
+def page_worker(ctx: JobCtx):
 
     page = ctx.payload["page"]
     # getting the unique key to track the childs
@@ -16,8 +17,7 @@ def page_worker(ctx):
     # acking itself as a child the number of remaining jobs are returned so we can say when the last job was executed
     remaining = ctx.exec.child_ack(completion_key)
 
-    print(f"[page_worker] Page {page} done. Remaining={remaining}")
-    
+    print(f"[page_worker] Page {page} done. Remaining={remaining}")    
 
     # remaining will be 0 ONLY when this is the last job
     # will return > 0 when are still jobs to process

@@ -2,9 +2,12 @@ import time
 
 # importing the lib
 from omniq.client import OmniqClient
+from omniq.types import JobCtx
 
 # creating your handler (ctx will have all the job information and actions)
-def my_actions(ctx):
+def my_actions(ctx: JobCtx):
+    is_last_attempt = ctx.attempt >= ctx.max_attempts
+    print("Last attempt?", is_last_attempt)
     print("Waiting 2 seconds")
     time.sleep(2)
     print("Done")

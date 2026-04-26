@@ -1,5 +1,8 @@
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, Union, Literal, List
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union, Literal, List
+
+if TYPE_CHECKING:
+    from .exec import Exec
 
 PayloadT = Union[Dict[str, Any], list, str]
 
@@ -10,10 +13,11 @@ class JobCtx:
     payload_raw: str
     payload: PayloadT
     attempt: int
+    max_attempts: int
     lock_until_ms: int
     lease_token: str
+    exec: "Exec"
     gid: str = ""
-    exec: Any = None
 
 @dataclass(frozen=True)
 class ReservePaused:
@@ -26,6 +30,7 @@ class ReserveJob:
     payload: str
     lock_until_ms: int
     attempt: int
+    max_attempts: int
     gid: str
     lease_token: str
 

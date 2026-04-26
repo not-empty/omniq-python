@@ -2,9 +2,10 @@ import time
 
 # importing the lib
 from omniq.client import OmniqClient
+from omniq.types import JobCtx
 
 # creating your handler (ctx will have all the job information and actions)
-def pause_unpause_example(ctx):
+def pause_unpause_example(ctx: JobCtx):
     print("Waiting 2 seconds")
 
     # checking if this queue it is paused (spoiler: it's not)
@@ -13,7 +14,6 @@ def pause_unpause_example(ctx):
     )
     print("Is paused", is_paused)
     time.sleep(2)
-
 
     print("Pausing")
 
