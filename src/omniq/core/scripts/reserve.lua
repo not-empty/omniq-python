@@ -25,7 +25,6 @@ local k_gready     = base .. ":groups:ready"
 local k_rr         = base .. ":lane:rr"
 local k_token_seq  = base .. ":lease:seq"
 local k_stats      = base .. ":stats"
-local k_queues     = "omniq:queues"
 local k_idx_wait   = base .. ":idx:wait"
 local k_idx_active = base .. ":idx:active"
 
@@ -161,8 +160,6 @@ local function try_grouped()
 
   return nil
 end
-
-redis.call("SADD", k_queues, base)
 
 local rr = to_i(redis.call("GET", k_rr))
 

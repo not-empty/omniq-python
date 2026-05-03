@@ -37,7 +37,6 @@ local k_delayed    = base .. ":delayed"
 local k_failed     = base .. ":failed"
 local k_gready     = base .. ":groups:ready"
 local k_stats      = base .. ":stats"
-local k_queues     = "omniq:queues"
 local k_idx_wait   = base .. ":idx:wait"
 local k_idx_delayed= base .. ":idx:delayed"
 local k_idx_failed = base .. ":idx:failed"
@@ -105,7 +104,6 @@ else
   inc_waiting_total = 1
 end
 
-redis.call("SADD", k_queues, base)
 hincrby_floor0(k_stats, "failed", dec_failed)
 
 if inc_waiting ~= 0 then

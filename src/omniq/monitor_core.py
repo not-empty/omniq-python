@@ -1,6 +1,6 @@
 from typing import Any, Dict, Iterable, Optional
 
-from .helper import as_str, queue_base
+from .helper import as_str, queue_base, validate_queue_name
 from .monitor_models import (
     GroupReady,
     GroupStatus,
@@ -12,7 +12,7 @@ from .monitor_models import (
 )
 
 class QueueMonitorCore:
-    QUEUE_REGISTRY = "omniq:queues"
+    QUEUE_SCAN_MATCH = "*:stats"
 
     MAX_LIST_LIMIT = 25
     MAX_GROUP_LIMIT = 500
@@ -152,13 +152,32 @@ class QueueMonitorCore:
             last_error=as_str(m.get("last_error")),
         )
 
-    def list_queues(self) -> list[str]:
+    def scan_queues(self) -> list[str]:
         try:
-            bases = self._r.smembers(self.QUEUE_REGISTRY) or []
+            keys = self._r.scan_iter(match=self.QUEUE_SCAN_MATCH, _type="hash")
         except Exception:
             return []
 
-        names = [self._normalize_queue_name(as_str(x)) for x in bases if as_str(x)]
+        names: list[str] = []
+        seen: set[str] = set()
+        for raw_key in keys:
+            key = as_str(raw_key)
+            if not key.endswith(":stats"):
+                continue
+
+            base = key[: -len(":stats")]
+            name = self._normalize_queue_name(base)
+            if not name or name in seen:
+                continue
+
+            try:
+                validate_queue_name(name)
+            except Exception:
+                continue
+
+            seen.add(name)
+            names.append(name)
+
         names.sort()
         return names
 
@@ -202,7 +221,7 @@ class QueueMonitorCore:
         )
 
     def stats_many(self, queues: Optional[Iterable[str]] = None) -> list[QueueStats]:
-        target = list(queues) if queues is not None else self.list_queues()
+        target = list(queues) if queues is not None else self.scan_queues()
         return [self.stats(q) for q in target]
 
     def groups_ready(

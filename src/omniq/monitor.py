@@ -15,8 +15,8 @@ class QueueMonitor:
     def __init__(self, uq):
         self._core = QueueMonitorCore(uq)
 
-    def list_queues(self) -> list[str]:
-        return self._core.list_queues()
+    def scan_queues(self) -> list[str]:
+        return self._core.scan_queues()
 
     def stats(self, queue: str) -> QueueStats:
         return self._core.stats(queue)

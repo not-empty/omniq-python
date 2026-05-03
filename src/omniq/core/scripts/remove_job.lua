@@ -53,7 +53,6 @@ local k_failed        = base .. ":failed"
 local k_completed     = base .. ":completed"
 local k_gready        = base .. ":groups:ready"
 local k_stats         = base .. ":stats"
-local k_queues        = "omniq:queues"
 local k_idx_wait      = base .. ":idx:wait"
 local k_idx_active    = base .. ":idx:active"
 local k_idx_delayed   = base .. ":idx:delayed"
@@ -146,8 +145,6 @@ if (lane == "wait" or lane == "failed" or lane == "completed" or lane == "gwait"
 end
 
 redis.call("DEL", k_job)
-
-redis.call("SADD", k_queues, base)
 
 if lane == "wait" then
   redis.call("ZREM", k_idx_wait, job_id)

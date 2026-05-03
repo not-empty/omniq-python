@@ -26,7 +26,6 @@ class RedisLike(Protocol):
 
 @dataclass(frozen=True)
 class RedisConnOpts:
-    redis_url: Optional[str] = None
     host: Optional[str] = None
     port: int = 6379
     db: int = 0
@@ -86,11 +85,8 @@ def _common_kwargs(opts: RedisConnOpts) -> dict[str, Any]:
 def build_redis_client(opts: RedisConnOpts) -> redis.Redis:
     kw = _common_kwargs(opts)
 
-    if opts.redis_url:
-        return redis.Redis.from_url(opts.redis_url, **kw)
-
     if not opts.host:
-        raise ValueError("RedisConnOpts requires host (or redis_url)")
+        raise ValueError("RedisConnOpts requires host")
 
     if RedisCluster is not None:
         rc = None

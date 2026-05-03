@@ -32,8 +32,7 @@ class OmniqOps:
                 try:
                     return self.r.evalsha(sha, numkeys, *keys_and_args)
                 except redis.exceptions.NoScriptError:
-                    new_sha = self.r.script_load(src)
-                    return self.r.evalsha(new_sha, numkeys, *keys_and_args)
+                    return self.r.eval(src, numkeys, *keys_and_args)
 
     def publish(
         self,

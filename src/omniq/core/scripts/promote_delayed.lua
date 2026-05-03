@@ -21,7 +21,6 @@ local k_idx_delayed = base .. ":idx:delayed"
 local k_idx_wait    = base .. ":idx:wait"
 
 local k_stats  = base .. ":stats"
-local k_queues = "omniq:queues"
 
 local function to_i(v)
   if v == false or v == nil or v == '' then return 0 end
@@ -94,8 +93,6 @@ for i=1,#ids do
 end
 
 if promoted > 0 then
-  redis.call("SADD", k_queues, base)
-
   if dec_delayed ~= 0 then
     hincrby_floor0(k_stats, "delayed", dec_delayed)
   end

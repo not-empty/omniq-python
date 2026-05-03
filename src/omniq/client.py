@@ -28,7 +28,6 @@ class OmniqClient:
         self,
         *,
         redis: Optional[RedisLike] = None,
-        redis_url: Optional[str] = None,
         host: Optional[str] = None,
         port: int = 6379,
         db: int = 0,
@@ -45,7 +44,6 @@ class OmniqClient:
         else:
             r = build_redis_client(
                 RedisConnOpts(
-                    redis_url=redis_url,
                     host=host,
                     port=port,
                     db=db,
