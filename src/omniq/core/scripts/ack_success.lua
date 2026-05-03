@@ -21,7 +21,6 @@ local k_active        = base .. ":active"
 local k_completed     = base .. ":completed"
 local k_gready        = base .. ":groups:ready"
 local k_stats         = base .. ":stats"
-local k_queues        = "omniq:queues"
 local k_idx_active    = base .. ":idx:active"
 local k_idx_completed = base .. ":idx:completed"
 
@@ -69,8 +68,6 @@ end
 if redis.call("ZREM", k_active, job_id) ~= 1 then
   return {"ERR", "NOT_ACTIVE"}
 end
-
-redis.call("SADD", k_queues, base)
 
 redis.call("HSET", k_job,
   "state", "completed",

@@ -159,6 +159,42 @@ Then create publish.py and consumer.py as shown above
 
 ------------------------------------------------------------------------
 
+## Connection Model
+
+`OmniqClient` uses `host` and `port` for Redis connections.
+
+``` python
+from omniq.client import OmniqClient
+
+omniq = OmniqClient(host="127.0.0.1", port=6379)
+```
+
+If the target is a Redis Cluster, the Python transport will detect it and use
+cluster mode automatically.
+
+------------------------------------------------------------------------
+
+## Queue Naming Rules
+
+Queue names are validated in Python before they reach Redis.
+
+Allowed:
+- letters
+- numbers
+- `.`
+- `_`
+- `-`
+
+Rejected:
+- empty names
+- leading or trailing whitespace
+- `{` or `}`
+- `:`
+- spaces and other unsupported characters
+- names longer than `128` chars
+
+------------------------------------------------------------------------
+
 ## Publishing
 
 ### Publish Simple Job
@@ -279,6 +315,28 @@ The heartbeat call renews the lease of the currently running job.
 -   Extends lock_until_ms safely
 -   Prevents the job from returning to the queue while still being processed
 -   Essential for long or unpredictable execution times.
+
+------------------------------------------------------------------------
+
+## Monitoring Discovery
+
+Python monitoring uses `scan_queues()` to discover queues by scanning `*:stats`
+keys.
+
+``` python
+from omniq.client import OmniqClient
+from omniq.monitor import QueueMonitor
+
+omniq = OmniqClient(host="omniq-redis", port=6379)
+monitor = QueueMonitor(omniq)
+
+queues = monitor.scan_queues()
+print(queues)
+```
+
+This is intended for admin/bootstrap discovery, not for high-frequency UI
+polling. Persistent manager tooling should store discovered queues externally
+when needed.
   
 ------------------------------------------------------------------------
 

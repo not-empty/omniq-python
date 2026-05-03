@@ -63,7 +63,6 @@ local k_failed        = base .. ":failed"
 local k_completed     = base .. ":completed"
 local k_gready        = base .. ":groups:ready"
 local k_stats         = base .. ":stats"
-local k_queues        = "omniq:queues"
 local k_idx_wait      = base .. ":idx:wait"
 local k_idx_active    = base .. ":idx:active"
 local k_idx_delayed   = base .. ":idx:delayed"
@@ -232,8 +231,6 @@ for i = 1, count do
 end
 
 if removed_ok > 0 then
-  redis.call("SADD", k_queues, base)
-
   if dec_waiting ~= 0 then
     hincrby_floor0(k_stats, "waiting", dec_waiting)
   end

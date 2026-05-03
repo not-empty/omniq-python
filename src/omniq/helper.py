@@ -1,9 +1,32 @@
+import re
+
 from typing import Any
 
+QUEUE_NAME_MAX_LEN = 128
+QUEUE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+def validate_queue_name(queue_name: str, max_len: int = QUEUE_NAME_MAX_LEN) -> str:
+    value = "" if queue_name is None else str(queue_name)
+
+    if value == "":
+        raise ValueError("queue name is required")
+
+    if value != value.strip():
+        raise ValueError("queue name must not have leading or trailing whitespace")
+
+    if len(value) > max_len:
+        raise ValueError(f"queue name too long (max {max_len} chars)")
+
+    if not QUEUE_NAME_RE.fullmatch(value):
+        raise ValueError(
+            "queue name contains invalid characters; allowed: letters, numbers, '.', '_', '-'"
+        )
+
+    return value
+
 def queue_base(queue_name: str) -> str:
-    if "{" in queue_name and "}" in queue_name:
-        return queue_name
-    return "{" + queue_name + "}"
+    value = validate_queue_name(queue_name)
+    return "{" + value + "}"
 
 def queue_anchor(queue_name: str) -> str:
     return queue_base(queue_name) + ":meta"

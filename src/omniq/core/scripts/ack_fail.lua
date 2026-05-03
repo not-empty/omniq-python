@@ -23,7 +23,6 @@ local k_delayed     = base .. ":delayed"
 local k_failed      = base .. ":failed"
 local k_gready      = base .. ":groups:ready"
 local k_stats       = base .. ":stats"
-local k_queues      = "omniq:queues"
 local k_idx_active  = base .. ":idx:active"
 local k_idx_delayed = base .. ":idx:delayed"
 local k_idx_failed  = base .. ":idx:failed"
@@ -83,8 +82,6 @@ end
 if redis.call("ZREM", k_active, job_id) ~= 1 then
   return {"ERR", "NOT_ACTIVE"}
 end
-
-redis.call("SADD", k_queues, base)
 
 hincrby_floor0(k_stats, "active", -1)
 redis.call("HSET", k_stats,

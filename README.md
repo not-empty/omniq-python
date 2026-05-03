@@ -26,6 +26,42 @@ Core project:
 pip install omniq
 ```
 
+## Connection Model
+
+`OmniqClient` supports Redis connections through `host` and `port`.
+
+```python
+from omniq.client import OmniqClient
+
+omniq = OmniqClient(
+    host="127.0.0.1",
+    port=6379,
+)
+```
+
+If the target is a Redis Cluster, the Python client will detect it and use
+cluster mode automatically.
+
+------------------------------------------------------------------------
+
+## Queue Names
+
+Queue names are validated in Python before any Redis operation.
+
+Allowed characters:
+- letters
+- numbers
+- `.`
+- `_`
+- `-`
+
+Rules:
+- must not be empty
+- must not contain leading or trailing whitespace
+- must not contain Redis hash-tag characters like `{` or `}`
+- must not contain `:` or spaces
+- max length is `128`
+
 ------------------------------------------------------------------------
 
 ## Features
@@ -196,6 +232,28 @@ def my_actions(ctx: JobCtx):
     is_last_attempt = ctx.attempt >= ctx.max_attempts
     print("Last attempt?", is_last_attempt)
 ```
+
+------------------------------------------------------------------------
+
+## Monitoring Discovery
+
+Queue discovery uses `scan_queues()`, which scans Redis for `*:stats` keys and
+returns normalized queue names.
+
+```python
+from omniq.client import OmniqClient
+from omniq.monitor import QueueMonitor
+
+omniq = OmniqClient(host="omniq-redis", port=6379)
+monitor = QueueMonitor(omniq)
+
+queues = monitor.scan_queues()
+print(queues)
+```
+
+`scan_queues()` is intended for admin/bootstrap discovery, not for hot-path UI
+refresh loops. Manager-style tooling should persist the discovered queue
+catalog externally when appropriate.
 
 ------------------------------------------------------------------------
 

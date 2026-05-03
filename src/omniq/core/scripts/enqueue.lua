@@ -27,12 +27,9 @@ local k_delayed       = base .. ":delayed"
 local k_wait          = base .. ":wait"
 local k_has_groups    = base .. ":has_groups"
 local k_stats         = base .. ":stats"
-local k_queues        = "omniq:queues"
 local k_idx_wait      = base .. ":idx:wait"
 local k_idx_delayed   = base .. ":idx:delayed"
 local is_grouped = (gid ~= nil and gid ~= "")
-
-redis.call("SADD", k_queues, base)
 
 if is_grouped then
   redis.call("HSET", k_job,
